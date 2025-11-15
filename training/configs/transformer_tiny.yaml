@@ -29,7 +29,7 @@ data:
   data_dir: "/data/processed"  # Modal volume path
   num_workers: 0  # Modal handles parallelism
   train_split: 0.9
-  max_samples: 500000  # Use 500k samples for better training
+  max_samples: null  # Use all 7.7M samples for maximum performance
 
 # HuggingFace upload settings
 huggingface:

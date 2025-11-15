@@ -667,7 +667,7 @@ Expected strength: **2800-3000 Elo** (superhuman)
 ### Documentation
 - This file: `training/docs/STOCKFISH_COMPARISON.md`
 - Architecture improvements: `training/docs/ARCHITECTURE_IMPROVEMENTS.md`
-- Main documentation: `my-chesshacks-bot/CLAUDE.md`
+- Main documentation: `CLAUDE.md`
 
 ### Scripts Created
 - `training/scripts/generate_stockfish_labels.py` - Create SF training labels

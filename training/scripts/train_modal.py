@@ -23,19 +23,19 @@ image = (
         "python-chess",
     )
     .add_local_dir(
-        local_path="scripts/models",
+        local_path="training/scripts/models",
         remote_path="/root/models"
     )
     .add_local_file(
-        local_path="scripts/model_factory.py",
+        local_path="training/scripts/model_factory.py",
         remote_path="/root/model_factory.py"
     )
     .add_local_file(
-        local_path="scripts/data_loader.py",
+        local_path="training/scripts/data_loader.py",
         remote_path="/root/data_loader.py"
     )
     .add_local_file(
-        local_path="scripts/preprocess.py",
+        local_path="training/scripts/preprocess.py",
         remote_path="/root/preprocess.py"
     )
 )

@@ -21,7 +21,7 @@ PGN (Game Format)          FEN (Position Format)        Bitboard (NN Input)
 
 ```bash
 # Make sure you're in the right directory
-cd /Users/stephencao/projects/chesshacks/my-chesshacks-bot
+cd /Users/stephencao/projects/chesshacks
 
 # Install dependencies
 pip install -r requirements.txt

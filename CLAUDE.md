@@ -338,7 +338,7 @@ modal run training/scripts/train_modal.py \
 ## 📁 Project Structure
 
 ```
-my-chesshacks-bot/
+chesshacks/
 ├── CLAUDE.md                          # This file
 ├── pyproject.toml
 ├── requirements.txt
