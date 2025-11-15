@@ -210,6 +210,8 @@ __marimo__/
 .env.local
 devtools
 
+pyproject.toml
+
 # Training artifacts (keep local, don't commit)
 training/data/raw/
 training/data/processed/

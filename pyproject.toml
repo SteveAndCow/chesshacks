@@ -1,4 +1,6 @@
 [project]
+name = "chesshacks-bot"
+3 +  version = "0.1.0"
 requires-python = ">=3.12.6,<3.13"
 
 [tool.setuptools]
