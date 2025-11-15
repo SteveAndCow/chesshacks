@@ -14,22 +14,25 @@ from pathlib import Path
 from tqdm import tqdm
 import sys
 
+
 def download_and_filter_games(
     min_elo: int = 2000,
-    max_games: int = 100000,
+    max_games: int = None,
     month: str = "2024-10",
     output_dir: str = "training/data/raw",
-    output_filename: str = "filtered_games.pgn"
+    output_filename: str = "filtered_games.pgn",
+    keep_compressed: bool = False
 ):
     """
     Download and filter games from Lichess database.
 
     Args:
         min_elo: Minimum elo rating (both players must meet this)
-        max_games: Maximum number of games to collect
+        max_games: Maximum number of games to collect (None = unlimited)
         month: Which month to download (format: YYYY-MM)
         output_dir: Where to save the filtered PGN file
         output_filename: Name of output file
+        keep_compressed: Keep the compressed .zst file after processing
     """
     # Check if zstandard is available
     try:
@@ -52,7 +55,7 @@ def download_and_filter_games(
     print("="*60)
     print(f"\nSettings:")
     print(f"  Minimum Elo: {min_elo} (both players)")
-    print(f"  Target Games: {max_games:,}")
+    print(f"  Target Games: {max_games:,}" if max_games else "  Target Games: All (unlimited)")
     print(f"  Source Month: {month}")
     print(f"  Output: {output_path}")
 
@@ -89,7 +92,7 @@ def download_and_filter_games(
     current_game = []
     white_elo = None
     black_elo = None
-    keep_game = False
+    has_moves = False  # Track if we've seen move data
 
     with open(compressed_path, 'rb') as compressed:
         dctx = zstd.ZstdDecompressor()
@@ -113,11 +116,15 @@ def download_and_filter_games(
                             if match:
                                 black_elo = int(match.group(1))
 
+                        # Detect move data (lines that don't start with [ and aren't empty)
+                        elif line.strip() and not line.startswith('['):
+                            has_moves = True
+
                         # Add line to current game
                         current_game.append(line)
 
-                        # Empty line indicates end of game
-                        if line.strip() == '' and current_game:
+                        # Empty line could be end of game (but only if we have moves)
+                        if line.strip() == '' and current_game and has_moves:
                             games_processed += 1
 
                             # Check if both players meet elo requirement
@@ -131,8 +138,8 @@ def download_and_filter_games(
                                     filter_rate = (games_kept / games_processed) * 100
                                     print(f"  Kept: {games_kept:,} / Processed: {games_processed:,} ({filter_rate:.1f}%)")
 
-                                # Stop if we've reached target
-                                if games_kept >= max_games:
+                                # Stop if we've reached target (if max_games is set)
+                                if max_games and games_kept >= max_games:
                                     print(f"\n✅ Reached target of {max_games:,} games!")
                                     break
 
@@ -140,21 +147,26 @@ def download_and_filter_games(
                             current_game = []
                             white_elo = None
                             black_elo = None
+                            has_moves = False
 
                         # Break if we've collected enough games
-                        if games_kept >= max_games:
+                        if max_games and games_kept >= max_games:
                             break
 
                     # Break outer loop if target reached
-                    if games_kept >= max_games:
+                    if max_games and games_kept >= max_games:
                         break
 
                     # Read next chunk
                     text_reader = reader.read(1024 * 1024)
 
-    # Cleanup compressed file
-    print(f"\n🧹 Cleaning up compressed file...")
-    compressed_path.unlink()
+    # Cleanup compressed file (unless user wants to keep it)
+    if keep_compressed:
+        print(f"\n💾 Keeping compressed file: {compressed_path}")
+        print(f"   Size: {compressed_path.stat().st_size / (1024**3):.2f} GB")
+    else:
+        print(f"\n🧹 Cleaning up compressed file...")
+        compressed_path.unlink()
 
     # Summary
     print("\n" + "="*60)
@@ -174,11 +186,11 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Download 100k games with 2000+ elo
-  python download_games.py --min-elo 2000 --max-games 100000
+  # Download ALL games with 2000+ elo (recommended for training flexibility)
+  python download_games.py --min-elo 2000 --month 2024-10
 
-  # Download 50k games with 2200+ elo from January 2024
-  python download_games.py --min-elo 2200 --max-games 50000 --month 2024-01
+  # Download only 100k games with 2200+ elo (for quick testing)
+  python download_games.py --min-elo 2200 --max-games 100000 --month 2024-10
         """
     )
 
@@ -192,8 +204,8 @@ Examples:
     parser.add_argument(
         '--max-games',
         type=int,
-        default=100000,
-        help='Maximum number of games to collect (default: 100000)'
+        default=None,
+        help='Maximum number of games to collect (default: None = unlimited, download all high-elo games)'
     )
 
     parser.add_argument(
@@ -217,6 +229,12 @@ Examples:
         help='Output filename (default: filtered_games.pgn)'
     )
 
+    parser.add_argument(
+        '--keep-compressed',
+        action='store_true',
+        help='Keep the compressed .zst file after processing (saves re-download time)'
+    )
+
     args = parser.parse_args()
 
     download_and_filter_games(
@@ -224,5 +242,6 @@ Examples:
         max_games=args.max_games,
         month=args.month,
         output_dir=args.output_dir,
-        output_filename=args.output_filename
+        output_filename=args.output_filename,
+        keep_compressed=args.keep_compressed
     )
