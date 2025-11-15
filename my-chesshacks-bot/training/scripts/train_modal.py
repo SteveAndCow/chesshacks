@@ -22,20 +22,20 @@ image = (
         "huggingface-hub",
         "python-chess",
     )
-    .copy_local_dir(
-        local_path="training/scripts/models",
+    .add_local_dir(
+        local_path="scripts/models",
         remote_path="/root/models"
     )
-    .copy_local_file(
-        local_path="training/scripts/model_factory.py",
+    .add_local_file(
+        local_path="scripts/model_factory.py",
         remote_path="/root/model_factory.py"
     )
-    .copy_local_file(
-        local_path="training/scripts/data_loader.py",
+    .add_local_file(
+        local_path="scripts/data_loader.py",
         remote_path="/root/data_loader.py"
     )
-    .copy_local_file(
-        local_path="training/scripts/preprocess.py",
+    .add_local_file(
+        local_path="scripts/preprocess.py",
         remote_path="/root/preprocess.py"
     )
 )
@@ -46,7 +46,7 @@ data_volume = modal.Volume.from_name("chess-training-data", create_if_missing=Tr
 
 @app.function(
     image=image,
-    gpu="A100",  # or "T4" for cheaper, "H100" for fastest
+    gpu="T4",  # or "T4" for cheaper, "H100" for fastest
     timeout=3600 * 4,  # 4 hours max
     volumes={"/data": data_volume},
     secrets=[
@@ -96,10 +96,19 @@ def train_model(config_dict: dict):
     data_dir = data_config.get("data_dir", "/data/processed")
 
     # Check if data exists in volume
+    print(f"Looking for data at: {data_dir}")
+    print(f"Volume contents at /data:")
+    for root, dirs, files in os.walk("/data"):
+        level = root.replace("/data", "").count(os.sep)
+        indent = " " * 2 * level
+        print(f"{indent}{os.path.basename(root)}/")
+        subindent = " " * 2 * (level + 1)
+        for file in files[:5]:  # Show first 5 files
+            print(f"{subindent}{file}")
+
     if not Path(data_dir).exists():
         print(f"⚠️  Data not found at {data_dir}")
-        print("You need to upload preprocessed data to Modal Volume first.")
-        print("See training/scripts/upload_data_to_modal.py")
+        print("Upload data with: modal volume put chess-training-data data/processed_16ch /processed")
         return {"error": "No training data found"}
 
     train_loader, val_loader = create_data_loaders(
@@ -144,6 +153,7 @@ def train_model(config_dict: dict):
     # Training loop
     print(f"\n🎯 Starting training for {training_config['epochs']} epochs...")
     best_val_loss = float('inf')
+    model_path = None  # Will be set when best model is saved
 
     for epoch in range(training_config["epochs"]):
         print(f"\n{'='*60}")
@@ -270,15 +280,57 @@ def train_model(config_dict: dict):
     repo_id = hf_config.get("repo_id", "your-username/chesshacks-bot")
     model_name = hf_config.get("model_name", "model")
 
+    # Verify model was saved
+    if model_path is None:
+        print("⚠️  No model checkpoint saved during training!")
+        print("This shouldn't happen - something went wrong.")
+        return {
+            "error": "No model checkpoint created",
+            "model_type": config_dict["model"]["type"],
+            "epochs_trained": training_config["epochs"],
+        }
+
+    # Verify HF token exists
+    hf_token = os.getenv("HF_TOKEN")
+    if not hf_token:
+        print("⚠️  HF_TOKEN not found in environment!")
+        print("Make sure 'huggingface-secret' is configured in Modal.")
+        print("Saving model to Modal Volume instead...")
+        volume_path = f"/data/models/{model_name}.pt"
+        Path(volume_path).parent.mkdir(parents=True, exist_ok=True)
+        torch.save(checkpoint, volume_path)
+        data_volume.commit()
+        return {
+            "model_type": config_dict["model"]["type"],
+            "best_val_loss": best_val_loss,
+            "final_accuracy": accuracy,
+            "epochs_trained": training_config["epochs"],
+            "saved_to": "modal_volume",
+            "volume_path": volume_path,
+        }
+
+    # Upload to HuggingFace
     try:
+        print(f"Uploading to: {repo_id}/{model_name}.pt")
+        print(f"Using token: {hf_token[:10]}...{hf_token[-4:]}")
+
         api = HfApi()
         api.upload_file(
             path_or_fileobj=model_path,
             path_in_repo=f"{model_name}.pt",
             repo_id=repo_id,
-            token=os.getenv("HF_TOKEN"),
+            token=hf_token,
         )
         print(f"✅ Model uploaded to https://huggingface.co/{repo_id}")
+        return {
+            "model_type": config_dict["model"]["type"],
+            "best_val_loss": best_val_loss,
+            "final_accuracy": accuracy,
+            "epochs_trained": training_config["epochs"],
+            "hf_repo": repo_id,
+            "model_name": model_name,
+            "upload_status": "success",
+        }
     except Exception as e:
         print(f"⚠️  Failed to upload to HuggingFace: {e}")
         print("Saving model to Modal Volume instead...")
@@ -287,26 +339,24 @@ def train_model(config_dict: dict):
         Path(volume_path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(checkpoint, volume_path)
         data_volume.commit()
-
-    print("\n✅ Training complete!")
-
-    return {
-        "model_type": config_dict["model"]["type"],
-        "best_val_loss": best_val_loss,
-        "final_accuracy": accuracy,
-        "epochs_trained": training_config["epochs"],
-        "hf_repo": repo_id,
-        "model_name": model_name,
-    }
+        return {
+            "model_type": config_dict["model"]["type"],
+            "best_val_loss": best_val_loss,
+            "final_accuracy": accuracy,
+            "epochs_trained": training_config["epochs"],
+            "saved_to": "modal_volume",
+            "volume_path": volume_path,
+            "upload_error": str(e),
+        }
 
 
 @app.local_entrypoint()
-def main(config: str = "training/configs/cnn_baseline.yaml"):
+def main(config: str = "configs/cnn_baseline.yaml"):
     """
     Local entrypoint - runs on your laptop, triggers Modal training.
 
     Usage:
-        modal run training/scripts/train_modal.py --config training/configs/transformer_tiny.yaml
+        modal run scripts/train_modal.py --config configs/transformer_tiny.yaml
     """
     import yaml
     from pathlib import Path

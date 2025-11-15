@@ -7,9 +7,17 @@ import torch
 import yaml
 from pathlib import Path
 from typing import Union
-from .models.base import ChessModelBase
-from .models.cnn import ChessCNN, ChessCNNLite
-from .models.transformer import ChessTransformer, ChessTransformerLite
+# Use absolute imports for Modal compatibility
+try:
+    # Try relative imports first (for local testing)
+    from .models.base import ChessModelBase
+    from .models.cnn import ChessCNN, ChessCNNLite
+    from .models.transformer import ChessTransformer, ChessTransformerLite
+except ImportError:
+    # Fall back to absolute imports (for Modal)
+    from models.base import ChessModelBase
+    from models.cnn import ChessCNN, ChessCNNLite
+    from models.transformer import ChessTransformer, ChessTransformerLite
 
 
 def create_model_from_config(config: Union[str, dict], device: str = None) -> ChessModelBase:

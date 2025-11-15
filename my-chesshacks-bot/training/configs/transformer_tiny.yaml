@@ -33,5 +33,5 @@ data:
 
 # HuggingFace upload settings
 huggingface:
-  repo_id: "your-username/chesshacks-bot"  # Change this!
+  repo_id: "steveandcow/chesshacks-bot"
   model_name: "transformer_tiny"
