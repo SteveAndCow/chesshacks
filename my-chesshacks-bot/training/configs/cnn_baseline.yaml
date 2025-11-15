@@ -1,0 +1,32 @@
+# CNN Baseline Configuration
+# Safe, proven architecture for quick iteration
+
+model:
+  type: "cnn_lite"  # or "cnn" for full ResNet version
+  params:
+    num_channels: 128
+
+training:
+  batch_size: 256
+  epochs: 10
+  lr: 0.001
+  weight_decay: 0.0001
+
+  # Loss weights
+  policy_weight: 1.0
+  value_weight: 1.0
+
+  # Learning rate schedule
+  lr_scheduler: "step"
+  lr_step_size: 5
+  lr_gamma: 0.1
+
+data:
+  data_dir: "training/data/processed"
+  num_workers: 4
+  train_split: 0.9
+
+# HuggingFace upload settings
+huggingface:
+  repo_id: "your-username/chesshacks-bot"  # Change this!
+  model_name: "cnn_baseline"
