@@ -43,7 +43,7 @@ if __name__ == "__main__":
             bitboard = fen_to_bitboards(parts[0])
             value = parts[1]
 
-            if value is "#":
+            if value == "#":
                 evaluation = math.inf
             else:
                 evaluation = int(value)
