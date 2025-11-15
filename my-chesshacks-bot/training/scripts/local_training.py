@@ -7,13 +7,14 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from models.transformer import ChessTransformer
 from stockfishdataset import StockfishDataset
+from models.cnn import ChessCNN
 
 def train_stockfish(model, test_dataloader, train_dataloader, save_path, dtype=torch.float, epochs=64):
     # Training setup
     file_path = f".\\{save_path}\\Config.pt"
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
-    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
 
     criterion = MSELoss()
     model.to("cuda", dtype)
@@ -46,16 +47,14 @@ def train_stockfish(model, test_dataloader, train_dataloader, save_path, dtype=t
 
             step += 1
             epoch_total_loss += loss.item()
+            batch_steps += 1
 
-            if batch_steps % (batches // 10) == 0:
-                first = f"[Step {batch_steps} / {batches}] Train: MSE Loss = {epoch_total_loss:.4f}"
-                print(first)
-                first = False
+            print(f"[Step {batch_steps} / {batches}] Train: MSE Loss = {loss.item():.4f}")
 
         evaluation_total_loss = evaluate_contrastive(model, test_dataloader)
 
-        term = f"[Epoch {epoch}] Train: MSE Loss = {epoch_total_loss / batches:.4f}"
-        term += f"Test: MSE Loss = {evaluation_total_loss / batches:.4f}"
+        term = f"[Epoch {epoch}] Train: MSE Loss = {epoch_total_loss / batches:.4f\n}"
+        term += f"Test: MSE Loss = {evaluation_total_loss / len(test_dataloader):.4f}"
 
         term += "\n"
 
@@ -85,29 +84,30 @@ def evaluate_contrastive(model, dataloader, dtype=torch.float):
 
 if __name__ == "__main__":
     print("Loading...")
-    test_bitboards = torch.load(".\\training\\data\\processed\\stockfish\\random_evals\\bitboards.pt", weights_only=False)
-    test_evaluations = torch.load(".\\training\\data\\processed\\stockfish\\random_evals\\evaluations.pt", weights_only=False)
+    test_bitboards = torch.load(".\\training\\data\\processed\\stockfish\\tactic_evals\\bitboards.pt", weights_only=False)
+    test_evaluations = torch.load(".\\training\\data\\processed\\stockfish\\tactic_evals\\evaluations.pt", weights_only=False)
     test_set = StockfishDataset(test_bitboards, test_evaluations)
 
-    train_bitboards = torch.load(".\\training\\data\\processed\\stockfish\\tactic_evals\\bitboards.pt", weights_only=False)
-    train_evaluations = torch.load(".\\training\\data\\processed\\stockfish\\tactic_evals\\evaluations.pt", weights_only=False)
+    train_bitboards = torch.load(".\\training\\data\\processed\\stockfish\\random_evals\\bitboards.pt", weights_only=False)
+    train_evaluations = torch.load(".\\training\\data\\processed\\stockfish\\random_evals\\evaluations.pt", weights_only=False)
     train_set = StockfishDataset(train_bitboards, train_evaluations)
 
     train_dataloader = DataLoader(
         train_set,
-        batch_size=64,
+        batch_size=8,
         shuffle=True,
     )
 
     test_dataloader = DataLoader(
         test_set,
-        batch_size=64,
+        batch_size=8,
         shuffle=True,
     )
 
     save_path = ".\\data\\"
 
-    model = ChessTransformer()
-    model = torch.compile(model)
+    model = ChessCNN()
+    #model = torch.compile(model)
+
     print("Training...")
     train_stockfish(model, test_dataloader, train_dataloader, save_path=save_path, dtype=torch.float, epochs=64)

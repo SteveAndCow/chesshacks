@@ -130,7 +130,7 @@ class ChessTransformer(ChessModelBase):
         self,
         d_model=256,
         nhead=8,
-        num_layers=4,
+        num_layers=6,
         dim_feedforward=1024,
         dropout=0.1
     ):

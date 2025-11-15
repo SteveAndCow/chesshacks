@@ -11,14 +11,24 @@ def square_index(rank, file):
 
 
 def fen_to_bitboards(fen):
-    pieces = ["P", "N", "B", "R", "Q", "K",
-              "p", "n", "b", "r", "q", "k"]
+
 
     # initialize 12 planes of 8×8 with zeros
-    planes = [[[0 for _ in range(8)] for _ in range(8)]
-              for _ in range(12)]
+    planes = torch.zeros((12, 8, 8), dtype=torch.uint8)
 
-    board = fen.split()[0]
+    pieces = fen.split(" ")
+    board = pieces[0]
+    to_move = pieces[1]
+
+    multiplier = 1
+    if to_move == "w":
+        pieces = ["P", "N", "B", "R", "Q", "K",
+                  "p", "n", "b", "r", "q", "k"]
+    else:
+        multiplier = -1
+        pieces = ["p", "n", "b", "r", "q",
+                  "k", "P", "N", "B", "R", "Q", "K"]
+
     ranks = board.split("/")
 
     # ranks: fen[0] is rank 8 → row 0
@@ -33,7 +43,7 @@ def fen_to_bitboards(fen):
                     planes[idx][row][col] = 1
                 col += 1
 
-    return planes
+    return planes, multiplier
 
 class StockfishDataset(Dataset):
     def __init__(self, bitboards, evaluations):
@@ -63,16 +73,18 @@ if __name__ == "__main__":
     with open(args.input_file) as f:
         for line in tqdm(f):
             parts = f.readline().strip("\n").split(',')
-            bitboard = fen_to_bitboards(parts[0])
-            bitboard = torch.tensor(bitboard, dtype=torch.uint8)
+            bitboard, to_move = fen_to_bitboards(parts[0])
+            bitboard = bitboard.clone().detach()
             value = parts[1]
 
             if value[0] == "#":
-                evaluation = 2^12 * int(value[1:])
+                evaluation = int(value[1:])
             else:
                 evaluation = int(value)
 
-            evaluation = max(min(evaluation, 2^16), -2^16)
+            evaluation = evaluation * to_move
+
+            evaluation = max(min(evaluation, 2^14), -2^14)
 
             bitboards.append(bitboard)
             evaluations.append(evaluation)
