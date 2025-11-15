@@ -15,7 +15,7 @@
 - Maximize playing strength (Elo rating)
 
 ### Technical Goals
-1. Train neural network on 77M positions from master games (2000+ Elo)
+1. Train neural network on 7.7M positions from master games (2000+ Elo)
 2. Implement MCTS (Monte Carlo Tree Search) guided by NN policy + value
 3. Achieve competitive strength through architecture improvements
 4. Deploy on Modal (cloud GPU training) + HuggingFace (model hosting)
@@ -80,9 +80,8 @@ Raw PGN → Filter by Elo → Extract positions → Convert to tensors → Save 
 - Channel 15: Halfmove clock (normalized)
 
 ### Dataset Statistics
-- **Full Dataset:** 77,855,213 training examples from ~100k games
+- **Full Dataset:** 7,785,213 training examples from ~100k games
 - **Test Dataset:** 15,420 examples from 200 games (for local validation)
-- **Average:** ~770 positions per game
 
 ---
 
