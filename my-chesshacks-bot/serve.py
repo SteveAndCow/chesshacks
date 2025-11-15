@@ -9,6 +9,13 @@ import os
 from src.utils import chess_manager
 from src import main
 
+# Note: To use trained models from HuggingFace, load them in src/main.py
+# Example:
+#   from src.models.inference import ChessModelLoader
+#   model_loader = ChessModelLoader(repo_id="your-username/chesshacks-bot", model_name="cnn_baseline")
+#   model_loader.load_model()
+#   # Then use model_loader.predict() or model_loader.get_best_move() in your bot logic
+
 app = FastAPI()
 
 
