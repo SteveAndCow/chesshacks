@@ -171,7 +171,7 @@ def test_func(ctx: GameContext):
     montecarlo = MonteCarlo(Node(ctx.board))
     montecarlo.child_finder = child_finder
     montecarlo.node_evaluator = node_evaluator
-    montecarlo.simulate(777)
+    montecarlo.simulate(256)
 
     legal_moves = list(ctx.board.generate_legal_moves())
     if not legal_moves:
