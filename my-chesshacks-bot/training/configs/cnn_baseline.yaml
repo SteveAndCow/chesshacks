@@ -15,6 +15,7 @@ training:
   # Loss weights
   policy_weight: 1.0
   value_weight: 1.0
+  result_weight: 0.5  # Auxiliary task for win/draw/loss classification
 
   # Learning rate schedule
   lr_scheduler: "step"
@@ -22,9 +23,10 @@ training:
   lr_gamma: 0.1
 
 data:
-  data_dir: "training/data/processed"
-  num_workers: 4
+  data_dir: "/data/processed"  # Modal volume path
+  num_workers: 0  # Modal handles parallelism
   train_split: 0.9
+  max_samples: 100000  # Use 100k samples for quick iteration
 
 # HuggingFace upload settings
 huggingface:

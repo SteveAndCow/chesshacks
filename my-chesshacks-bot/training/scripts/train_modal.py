@@ -106,7 +106,8 @@ def train_model(config_dict: dict):
         data_dir=data_dir,
         batch_size=config_dict["training"]["batch_size"],
         train_split=data_config.get("train_split", 0.9),
-        num_workers=0  # Modal handles parallelism
+        num_workers=0,  # Modal handles parallelism
+        max_samples=data_config.get("max_samples", None)
     )
 
     # Setup training
@@ -162,11 +163,20 @@ def train_model(config_dict: dict):
 
             optimizer.zero_grad()
 
-            policy_logits, value_pred = model(boards)
+            policy_logits, value_pred, result_logits = model(boards)
+
+            # Convert continuous values to result classes (loss=0, draw=1, win=2)
+            result_targets = torch.zeros(values.size(0), dtype=torch.long, device=device)
+            result_targets[values[:, 0] < -0.3] = 0  # loss
+            result_targets[(values[:, 0] >= -0.3) & (values[:, 0] <= 0.3)] = 1  # draw
+            result_targets[values[:, 0] > 0.3] = 2  # win
 
             p_loss = policy_criterion(policy_logits, moves)
             v_loss = value_criterion(value_pred, values)
-            loss = policy_weight * p_loss + value_weight * v_loss
+            r_loss = policy_criterion(result_logits, result_targets)  # Use CrossEntropyLoss
+
+            result_weight = training_config.get("result_weight", 0.5)
+            loss = policy_weight * p_loss + value_weight * v_loss + result_weight * r_loss
 
             loss.backward()
             optimizer.step()
@@ -193,11 +203,19 @@ def train_model(config_dict: dict):
                 moves = moves.to(device)
                 values = values.to(device).unsqueeze(1)
 
-                policy_logits, value_pred = model(boards)
+                policy_logits, value_pred, result_logits = model(boards)
+
+                # Convert continuous values to result classes
+                result_targets = torch.zeros(values.size(0), dtype=torch.long, device=device)
+                result_targets[values[:, 0] < -0.3] = 0  # loss
+                result_targets[(values[:, 0] >= -0.3) & (values[:, 0] <= 0.3)] = 1  # draw
+                result_targets[values[:, 0] > 0.3] = 2  # win
 
                 p_loss = policy_criterion(policy_logits, moves)
                 v_loss = value_criterion(value_pred, values)
-                loss = policy_weight * p_loss + value_weight * v_loss
+                r_loss = policy_criterion(result_logits, result_targets)
+
+                loss = policy_weight * p_loss + value_weight * v_loss + result_weight * r_loss
 
                 val_loss += loss.item()
                 val_policy_loss += p_loss.item()

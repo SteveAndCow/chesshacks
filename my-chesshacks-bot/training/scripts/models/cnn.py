@@ -45,8 +45,8 @@ class ChessCNN(ChessModelBase):
         self.num_residual_blocks = num_residual_blocks
         self.num_channels = num_channels
 
-        # Initial convolution
-        self.conv_input = nn.Conv2d(12, num_channels, kernel_size=3, padding=1)
+        # Initial convolution (16 channels: 12 pieces + 4 game state)
+        self.conv_input = nn.Conv2d(16, num_channels, kernel_size=3, padding=1)
         self.bn_input = nn.BatchNorm2d(num_channels)
 
         # Residual tower
@@ -64,6 +64,12 @@ class ChessCNN(ChessModelBase):
         self.value_bn = nn.BatchNorm2d(32)
         self.value_fc1 = nn.Linear(32 * 8 * 8, 256)
         self.value_fc2 = nn.Linear(256, 1)
+
+        # Result classification head (win/draw/loss)
+        self.result_conv = nn.Conv2d(num_channels, 32, kernel_size=1)
+        self.result_bn = nn.BatchNorm2d(32)
+        self.result_fc1 = nn.Linear(32 * 8 * 8, 256)
+        self.result_fc2 = nn.Linear(256, 3)  # 3 classes
 
     def forward(self, x):
         # Input: (batch, 12, 8, 8)
@@ -84,7 +90,13 @@ class ChessCNN(ChessModelBase):
         value = F.relu(self.value_fc1(value))
         value = torch.tanh(self.value_fc2(value))  # (batch, 1) in [-1, 1]
 
-        return policy, value
+        # Result classification head
+        result = F.relu(self.result_bn(self.result_conv(x)))
+        result = result.view(-1, 32 * 8 * 8)
+        result = F.relu(self.result_fc1(result))
+        result = self.result_fc2(result)  # (batch, 3) logits
+
+        return policy, value, result
 
     def get_architecture_name(self) -> str:
         return f"CNN-ResNet-{self.num_residual_blocks}x{self.num_channels}"
@@ -103,8 +115,8 @@ class ChessCNNLite(ChessModelBase):
 
         self.num_channels = num_channels
 
-        # Simple CNN (no residual blocks)
-        self.conv1 = nn.Conv2d(12, 64, kernel_size=3, padding=1)
+        # Simple CNN (no residual blocks, 16 input channels)
+        self.conv1 = nn.Conv2d(16, 64, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(64, num_channels, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(num_channels, num_channels, kernel_size=3, padding=1)
 
@@ -116,6 +128,11 @@ class ChessCNNLite(ChessModelBase):
         self.value_conv = nn.Conv2d(num_channels, 32, kernel_size=1)
         self.value_fc1 = nn.Linear(32 * 8 * 8, 256)
         self.value_fc2 = nn.Linear(256, 1)
+
+        # Result classification head (win/draw/loss)
+        self.result_conv = nn.Conv2d(num_channels, 32, kernel_size=1)
+        self.result_fc1 = nn.Linear(32 * 8 * 8, 256)
+        self.result_fc2 = nn.Linear(256, 3)  # 3 classes
 
     def forward(self, x):
         # Convolutional layers
@@ -134,7 +151,13 @@ class ChessCNNLite(ChessModelBase):
         value = F.relu(self.value_fc1(value))
         value = torch.tanh(self.value_fc2(value))
 
-        return policy, value
+        # Result classification head
+        result = F.relu(self.result_conv(x))
+        result = result.view(-1, 32 * 8 * 8)
+        result = F.relu(self.result_fc1(result))
+        result = self.result_fc2(result)  # (batch, 3) logits
+
+        return policy, value, result
 
     def get_architecture_name(self) -> str:
         return f"CNN-Lite-{self.num_channels}"

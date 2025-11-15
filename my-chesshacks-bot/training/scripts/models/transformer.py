@@ -51,7 +51,8 @@ class TransformerEncoderLayer(nn.Module):
         self.self_attn = nn.MultiheadAttention(
             d_model, nhead, dropout=dropout, batch_first=True
         )
-        #self.relative_bias = RelativePositionBias(nhead)
+        self.relative_bias = RelativePositionBias(nhead)
+        self.nhead = nhead
 
         # Feedforward network
         self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -65,11 +66,20 @@ class TransformerEncoderLayer(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, src):
-        bias = self.relative_bias(seq_len=src.size(1))  # (nhead, 64, 64)
+        batch_size = src.size(0)
+        seq_len = src.size(1)
+
+        # Get relative position bias: (num_heads, seq_len, seq_len)
+        bias = self.relative_bias(seq_len=seq_len)  # (nhead, 64, 64)
+
+        # Expand for batch: (batch*num_heads, seq_len, seq_len)
+        # Repeat the bias for each sample in the batch
+        bias = bias.unsqueeze(0).repeat(batch_size, 1, 1, 1)  # (batch, nhead, 64, 64)
+        bias = bias.view(batch_size * self.nhead, seq_len, seq_len)  # (batch*nhead, 64, 64)
 
         src2, _ = self.self_attn(
             src, src, src,
-            attn_mask=bias.repeat(src.size(0), 1, 1)  # (batch*nhead, 64, 64)
+            attn_mask=bias
         )
 
         src = src + self.dropout1(src2)
@@ -98,8 +108,9 @@ class ChessTransformer(ChessModelBase):
         self.nhead = nhead
         self.num_layers = num_layers
 
-        # Input embedding: Convert (12, 8, 8) board to 64 tokens
-        self.input_proj = nn.Linear(12, d_model)
+        # Input embedding: Convert (16, 8, 8) board to 64 tokens
+        # 16 channels: 12 pieces + 2 castling + 1 en passant + 1 halfmove
+        self.input_proj = nn.Linear(16, d_model)
 
         # Transformer encoder layers
 
@@ -119,11 +130,16 @@ class ChessTransformer(ChessModelBase):
         self.value_fc1 = nn.Linear(d_model * 64, 256)
         self.value_fc2 = nn.Linear(256, 1)
 
+        # Result classification head (auxiliary task for better learning)
+        # Predicts win/draw/loss classes
+        self.result_fc1 = nn.Linear(d_model * 64, 256)
+        self.result_fc2 = nn.Linear(256, 3)  # 3 classes: loss, draw, win
+
     def forward(self, x):
         batch_size = x.size(0)
 
-        # Reshape board to sequence of squares: (batch, 64, 12)
-        x = x.view(batch_size, 12, 64).permute(0, 2, 1)  # (batch, 64, 12)
+        # Reshape board to sequence of squares: (batch, 64, 16)
+        x = x.view(batch_size, 16, 64).permute(0, 2, 1)  # (batch, 64, 16)
 
         # Project to d_model dimensions
         x = self.input_proj(x)  # (batch, 64, d_model)
@@ -148,7 +164,36 @@ class ChessTransformer(ChessModelBase):
         value = F.relu(self.value_fc1(value_input))
         value = torch.tanh(self.value_fc2(value))  # (batch, 1)
 
-        return policy, value
+        # Result classification head (win/draw/loss)
+        result = F.relu(self.result_fc1(value_input))
+        result = self.result_fc2(result)  # (batch, 3) logits
+
+        return policy, value, result
 
     def get_architecture_name(self) -> str:
         return f"Transformer-{self.num_layers}L-{self.nhead}H-{self.d_model}D"
+
+
+class ChessTransformerLite(ChessTransformer):
+    """
+    Lightweight transformer for faster training.
+    Smaller model, fewer parameters, faster iteration.
+    """
+    def __init__(
+        self,
+        d_model=128,
+        nhead=4,
+        num_layers=2,
+        dim_feedforward=512,
+        dropout=0.1
+    ):
+        super().__init__(
+            d_model=d_model,
+            nhead=nhead,
+            num_layers=num_layers,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout
+        )
+
+    def get_architecture_name(self) -> str:
+        return f"TransformerLite-{self.num_layers}L-{self.nhead}H-{self.d_model}D"
