@@ -1,0 +1,35 @@
+# Tiny Transformer Configuration
+# ChessFormer-inspired architecture scaled down for 36-hour hackathon
+
+model:
+  type: "transformer_lite"  # or "transformer" for full version
+  params:
+    d_model: 128
+    nhead: 4
+    num_layers: 2
+    dim_feedforward: 512
+    dropout: 0.1
+
+training:
+  batch_size: 128  # Smaller batch for transformer
+  epochs: 15
+  lr: 0.0001  # Lower LR for transformer
+  weight_decay: 0.0001
+
+  # Loss weights
+  policy_weight: 1.0
+  value_weight: 1.0
+
+  # Learning rate schedule
+  lr_scheduler: "cosine"  # Cosine annealing works well for transformers
+  warmup_epochs: 2
+
+data:
+  data_dir: "training/data/processed"
+  num_workers: 4
+  train_split: 0.9
+
+# HuggingFace upload settings
+huggingface:
+  repo_id: "your-username/chesshacks-bot"  # Change this!
+  model_name: "transformer_tiny"

@@ -4,3 +4,30 @@ venv
 .env.local
 .env
 devtools
+
+# Training artifacts (keep local, don't commit)
+training/data/raw/
+training/data/processed/
+training/models/
+training/notebooks/.ipynb_checkpoints/
+training/**/*.pt
+training/**/*.pth
+training/**/*.ckpt
+training/**/*.npy
+training/**/*.pgn
+training/**/*.pgn.zst
+
+# Model cache (downloaded from HuggingFace)
+src/models/.cache/
+.model_cache/
+*.pt
+*.pth
+
+# Python
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
