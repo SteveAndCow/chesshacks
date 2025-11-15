@@ -1,10 +1,165 @@
+import math
+from copy import deepcopy
+
+import numpy as np
+
 from .utils import chess_manager, GameContext
 from chess import Move
 import random
-import time
+
+import random
+from math import log, sqrt
+
+class Node:
+    def __init__(self, state):
+        self.state = state
+        self.win_value = 0
+        self.policy_value = None
+        self.visits = 0
+        self.parent = None
+        self.children = []
+        self.expanded = False
+        self.player_number = None
+        self.discovery_factor = 0.35
+
+    def update_win_value(self, value):
+        self.win_value += value
+        self.visits += 1
+
+        if self.parent:
+            self.parent.update_win_value(value)
+
+    def update_policy_value(self, value):
+        self.policy_value = value
+
+    def add_child(self, child):
+        self.children.append(child)
+        child.parent = self
+
+    def add_children(self, children):
+        for child in children:
+            self.add_child(child)
+
+    def get_preferred_child(self, root_node):
+        best_children = []
+        best_score = float('-inf')
+
+        for child in self.children:
+            score = child.get_score(root_node)
+            if score > best_score:
+                best_score = score
+                best_children = [child]
+            elif score == best_score:
+                best_children.append(child)
+
+        return random.choice(best_children)
+
+    def get_score(self, root_node):
+        discovery_operand = self.discovery_factor * (self.policy_value or 1) * sqrt(log(self.parent.visits or 1) / (self.visits or 1))
+        win_multiplier = 1 if self.parent.player_number == root_node.player_number else -1
+        win_operand = win_multiplier * self.win_value / (self.visits or 1)
+        self.score = win_operand + discovery_operand
+
+        self.score += len(list(self.state.generate_legal_moves()))
+
+        pawns = self.state.pawns.bit_count() * 1
+        knights = self.state.knights.bit_count() * 3
+        bishops = self.state.bishops.bit_count() * 3
+        rooks = self.state.rooks.bit_count() * 5
+        queens = self.state.queens.bit_count() * 9
+
+        piece_score = pawns + knights + bishops + rooks + queens
+
+        return self.score + piece_score / 40.0
+
+    def is_scorable(self):
+        return self.visits or self.policy_value != None
+
+class MonteCarlo:
+
+    def __init__(self, root_node):
+        self.root_node = root_node
+        self.child_finder = None
+        self.node_evaluator = lambda child, montecarlo: int
+
+    def make_choice(self):
+        best_children = []
+        most_visits = float('-inf')
+
+        for child in self.root_node.children:
+            if child.visits > most_visits:
+                most_visits = child.visits
+                best_children = [child]
+            elif child.visits == most_visits:
+                best_children.append(child)
+
+        return random.choice(best_children)
+
+    def make_exploratory_choice(self):
+        children_visits = map(lambda child: child.visits, self.root_node.children)
+        children_visit_probabilities = [visit / self.root_node.visits for visit in children_visits]
+        random_probability = random.uniform(0, sum(children_visit_probabilities))
+        probabilities_already_counted = 0.
+
+        for i, probability in enumerate(children_visit_probabilities):
+            if probabilities_already_counted + probability >= random_probability:
+                return self.root_node.children[i]
+
+            probabilities_already_counted += probability
+
+    def simulate(self, expansion_count = 1):
+        for i in range(expansion_count):
+            current_node = self.root_node
+            while current_node.expanded:
+                current_node = current_node.get_preferred_child(self.root_node)
+
+            self.expand(current_node)
+
+    def expand(self, node):
+        self.child_finder(node, self)
+
+        for child in node.children:
+            child_win_value = self.node_evaluator(child, self)
+
+            if child_win_value != None:
+                child.update_win_value(child_win_value)
+
+            if not child.is_scorable():
+                self.random_rollout(child)
+                child.children = []
+
+        if len(node.children):
+            node.expanded = True
+
+    def random_rollout(self, node):
+        self.child_finder(node, self)
+        child = random.choice(node.children)
+        node.children = []
+        node.add_child(child)
+        child_win_value = self.node_evaluator(child, self)
+
+        if child_win_value != None:
+            node.update_win_value(child_win_value)
+        else:
+            self.random_rollout(child)
 
 # Write code here that runs once
 # Can do things like load models from huggingface, make connections to subprocesses, etcwenis
+
+def child_finder(node, montecarlo):
+    for move in node.state.generate_legal_moves():
+        new_board = deepcopy(node.state) # Note, probably slow
+        new_board.push(move)
+        child = Node(new_board)
+        node.add_child(child)
+
+def node_evaluator(node, montecarlo):
+    if node.state.is_variant_win():
+        return math.inf
+    elif node.state.is_variant_loss():
+        return -math.inf
+
+    return node.get_score(montecarlo.root_node)
 
 
 @chess_manager.entrypoint
@@ -13,8 +168,10 @@ def test_func(ctx: GameContext):
     # Return a python-chess Move object that is a legal move for the current position
 
     print("Cooking move...")
-    print(ctx.board.move_stack)
-    time.sleep(0.1)
+    montecarlo = MonteCarlo(Node(ctx.board))
+    montecarlo.child_finder = child_finder
+    montecarlo.node_evaluator = node_evaluator
+    montecarlo.simulate(777)
 
     legal_moves = list(ctx.board.generate_legal_moves())
     if not legal_moves:
@@ -23,6 +180,7 @@ def test_func(ctx: GameContext):
 
     move_weights = [random.random() for _ in legal_moves]
     total_weight = sum(move_weights)
+
     # Normalize so probabilities sum to 1
     move_probs = {
         move: weight / total_weight
