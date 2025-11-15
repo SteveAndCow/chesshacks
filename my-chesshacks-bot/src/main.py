@@ -143,8 +143,24 @@ class MonteCarlo:
         else:
             self.random_rollout(child)
 
-# Write code here that runs once
-# Can do things like load models from huggingface, make connections to subprocesses, etcwenis
+# Load the trained neural network model
+print("🤖 Loading chess model from HuggingFace...")
+from .models.inference import ChessModelLoader
+
+model_loader = ChessModelLoader(
+    repo_id="steveandcow/chesshacks-bot",
+    model_name="cnn_baseline",
+    device="cpu"  # Use CPU for deployment (or "cuda" if GPU available)
+)
+
+try:
+    model_loader.load_model()
+    print("✅ Model loaded successfully!")
+    MODEL_LOADED = True
+except Exception as e:
+    print(f"⚠️ Failed to load model: {e}")
+    print("Falling back to random policy...")
+    MODEL_LOADED = False
 
 def child_finder(node, montecarlo):
     for move in node.state.generate_legal_moves():
@@ -159,6 +175,15 @@ def node_evaluator(node, montecarlo):
     elif node.state.is_variant_loss():
         return -math.inf
 
+    # Use neural network for position evaluation if available
+    if MODEL_LOADED:
+        try:
+            value = model_loader.evaluate_position(node.state)
+            return value
+        except Exception as e:
+            print(f"⚠️ NN evaluation failed: {e}")
+            pass
+
     return node.get_score(montecarlo.root_node)
 
 
@@ -168,26 +193,55 @@ def test_func(ctx: GameContext):
     # Return a python-chess Move object that is a legal move for the current position
 
     print("Cooking move...")
-    montecarlo = MonteCarlo(Node(ctx.board))
-    montecarlo.child_finder = child_finder
-    montecarlo.node_evaluator = node_evaluator
-    montecarlo.simulate(256)
 
     legal_moves = list(ctx.board.generate_legal_moves())
     if not legal_moves:
         ctx.logProbabilities({})
-        raise ValueError("No legal moves available (i probably lost didn't i)")
+        raise ValueError("No legal moves available")
 
+    # Get move probabilities from neural network
+    if MODEL_LOADED:
+        try:
+            move_probs, position_value = model_loader.predict(ctx.board)
+            print(f"Position value: {position_value:.3f}")
+
+            # Log probabilities for analysis
+            ctx.logProbabilities(move_probs)
+
+            # Run MCTS with NN guidance
+            montecarlo = MonteCarlo(Node(ctx.board))
+            montecarlo.child_finder = child_finder
+            montecarlo.node_evaluator = node_evaluator
+            montecarlo.simulate(256)  # Run MCTS simulations
+
+            # Get best move from MCTS
+            best_child = montecarlo.make_choice()
+            best_move = None
+            for move in legal_moves:
+                test_board = deepcopy(ctx.board)
+                test_board.push(move)
+                if test_board.fen() == best_child.state.fen():
+                    best_move = move
+                    break
+
+            if best_move:
+                return best_move
+
+            # Fallback: use NN policy directly
+            print("⚠️ MCTS fallback to NN policy")
+            return max(move_probs.items(), key=lambda x: x[1])[0]
+
+        except Exception as e:
+            print(f"⚠️ NN prediction failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # Fallback to random if NN not available
+    print("⚠️ Using random policy")
     move_weights = [random.random() for _ in legal_moves]
     total_weight = sum(move_weights)
-
-    # Normalize so probabilities sum to 1
-    move_probs = {
-        move: weight / total_weight
-        for move, weight in zip(legal_moves, move_weights)
-    }
+    move_probs = {move: weight / total_weight for move, weight in zip(legal_moves, move_weights)}
     ctx.logProbabilities(move_probs)
-
     return random.choices(legal_moves, weights=move_weights, k=1)[0]
 
 

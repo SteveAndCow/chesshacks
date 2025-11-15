@@ -29,7 +29,7 @@ class ChessModelLoader:
 
     def __init__(
         self,
-        repo_id: str = "your-username/chesshacks-bot",
+        repo_id: str = "steveandcow/chesshacks-bot",
         model_name: str = "cnn_baseline",
         cache_dir: str = "./.model_cache",
         device: Optional[str] = None
@@ -136,15 +136,21 @@ class ChessModelLoader:
 
     def board_to_tensor(self, board: chess.Board) -> torch.Tensor:
         """
-        Convert chess board to tensor representation.
+        Convert chess board to tensor representation (16 channels).
 
         Args:
             board: python-chess Board object
 
         Returns:
-            (1, 12, 8, 8) tensor ready for model input
+            (1, 16, 8, 8) tensor ready for model input
+
+        Channels:
+            0-11: Piece positions (6 types × 2 colors)
+            12-13: Castling rights (kingside/queenside)
+            14: En passant file indicator
+            15: Halfmove clock (normalized)
         """
-        tensor = np.zeros((12, 8, 8), dtype=np.float32)
+        tensor = np.zeros((16, 8, 8), dtype=np.float32)
 
         piece_idx = {
             (chess.PAWN, chess.WHITE): 0,
@@ -161,6 +167,7 @@ class ChessModelLoader:
             (chess.KING, chess.BLACK): 11,
         }
 
+        # Fill piece positions (channels 0-11)
         for square in chess.SQUARES:
             piece = board.piece_at(square)
             if piece:
@@ -169,8 +176,26 @@ class ChessModelLoader:
                 file = square % 8
                 tensor[idx, rank, file] = 1.0
 
+        # Castling rights (channels 12-13)
+        if board.has_kingside_castling_rights(chess.WHITE):
+            tensor[12, :, :] = 1.0
+        if board.has_queenside_castling_rights(chess.WHITE):
+            tensor[12, :, :] = 1.0
+        if board.has_kingside_castling_rights(chess.BLACK):
+            tensor[13, :, :] = 1.0
+        if board.has_queenside_castling_rights(chess.BLACK):
+            tensor[13, :, :] = 1.0
+
+        # En passant file (channel 14)
+        if board.ep_square is not None:
+            file = board.ep_square % 8
+            tensor[14, :, file] = 1.0
+
+        # Halfmove clock (channel 15) - normalized to [0, 1]
+        tensor[15, :, :] = min(board.halfmove_clock / 100.0, 1.0)
+
         # Convert to torch and add batch dimension
-        tensor = torch.from_numpy(tensor).unsqueeze(0)  # (1, 12, 8, 8)
+        tensor = torch.from_numpy(tensor).unsqueeze(0)  # (1, 16, 8, 8)
         return tensor.to(self.device)
 
     def predict(
@@ -196,7 +221,7 @@ class ChessModelLoader:
 
         # Run inference
         with torch.no_grad():
-            policy_logits, value_pred = self.model(board_tensor)
+            policy_logits, value_pred, result_logits = self.model(board_tensor)
 
         # Convert policy logits to probabilities
         policy_probs = torch.softmax(policy_logits[0], dim=0)  # (4096,)
