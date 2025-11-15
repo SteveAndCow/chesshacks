@@ -7,9 +7,9 @@ import torch
 import yaml
 from pathlib import Path
 from typing import Union
-from models.base import ChessModelBase
-from models.cnn import ChessCNN, ChessCNNLite
-from models.transformer import ChessTransformer, ChessTransformerLite
+from .models.base import ChessModelBase
+from .models.cnn import ChessCNN, ChessCNNLite
+from .models.transformer import ChessTransformer, ChessTransformerLite
 
 
 def create_model_from_config(config: Union[str, dict], device: str = None) -> ChessModelBase:
