@@ -44,6 +44,47 @@ class LearnedPositionalBias(nn.Module):
         return input + self.bias
 
 
+class MultiheadAttention(nn.Module):
+    def __init__(self, d_model, num_heads, dropout=0.0):
+        super().__init__()
+        assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
+
+        self.embed_dim = d_model
+        self.num_heads = num_heads
+        self.head_dim = d_model // num_heads
+        self.scaling = self.head_dim ** -0.5
+
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, query, key, value):
+
+        QB, QL, _ = query.shape
+
+        # Linear projections
+        q = self.q_proj(query).view(QB, QL, self.num_heads, self.head_dim)
+        k = self.k_proj(key).view(QB, QL, self.num_heads, self.head_dim)
+        v = self.v_proj(value).view(QB, QL, self.num_heads, self.head_dim)
+
+        q = q.half()
+        k = k.half()
+        v = v.half()
+
+        output = flash_attn_func(
+            q, k, v,
+            dropout_p=0.0,
+            causal=False,
+        )
+
+        output = output.view(QB, QL, self.embed_dim)
+
+        output = output.float()
+
+        return output
+
 class TransformerEncoderLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
         super().__init__()
@@ -51,6 +92,7 @@ class TransformerEncoderLayer(nn.Module):
         self.self_attn = nn.MultiheadAttention(
             d_model, nhead, dropout=dropout, batch_first=True
         )
+
         #self.relative_bias = RelativePositionBias(nhead)
 
         # Feedforward network
@@ -65,11 +107,11 @@ class TransformerEncoderLayer(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, src):
-        bias = self.relative_bias(seq_len=src.size(1))  # (nhead, 64, 64)
+        #bias = self.relative_bias(seq_len=src.size(1))  # (nhead, 64, 64)
 
         src2, _ = self.self_attn(
             src, src, src,
-            attn_mask=bias.repeat(src.size(0), 1, 1)  # (batch*nhead, 64, 64)
+            #attn_mask=bias.repeat(src.size(0), 1, 1)  # (batch*nhead, 64, 64)
         )
 
         src = src + self.dropout1(src2)

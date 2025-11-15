@@ -1,4 +1,9 @@
 ﻿import math
+import os
+
+from tqdm import tqdm
+import torch
+from torch.utils.data import Dataset
 
 
 def square_index(rank, file):
@@ -6,50 +11,73 @@ def square_index(rank, file):
 
 
 def fen_to_bitboards(fen):
-    piece_order = ["P", "N", "B", "R", "Q", "K",
-                   "p", "n", "b", "r", "q", "k"]
-    bitboards = {p: 0 for p in piece_order}
+    pieces = ["P", "N", "B", "R", "Q", "K",
+              "p", "n", "b", "r", "q", "k"]
 
-    board = fen.split()[0]     # only the board portion
+    # initialize 12 planes of 8×8 with zeros
+    planes = [[[0 for _ in range(8)] for _ in range(8)]
+              for _ in range(12)]
+
+    board = fen.split()[0]
     ranks = board.split("/")
 
-    for r, rank in enumerate(reversed(ranks), start=1):  # r=1 → rank 1
-        file = 0
+    # ranks: fen[0] is rank 8 → row 0
+    for row, rank in enumerate(ranks):
+        col = 0
         for ch in rank:
             if ch.isdigit():
-                file += int(ch)
+                col += int(ch)
             else:
-                if ch in bitboards:
-                    sq = square_index(r, file)
-                    bitboards[ch] |= (1 << sq)
-                file += 1
+                if ch in pieces:
+                    idx = pieces.index(ch)
+                    planes[idx][row][col] = 1
+                col += 1
 
-    return bitboards
+    return planes
+
+class StockfishDataset(Dataset):
+    def __init__(self, bitboards, evaluations):
+
+        self.bitboards = bitboards
+        self.evaluations = evaluations
+
+    def __len__(self):
+        return len(self.bitboards)
+
+    def __getitem__(self, idx):
+        return self.bitboards[idx], self.evaluations[idx]
 
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--file", type=str, required=True, help="Path to the dataset file")
+    parser.add_argument("--input_file", type=str, required=True, help="Path to the dataset file")
+    parser.add_argument("--output_file", type=str, required=True, help="Path to the output file")
+
     args = parser.parse_args()
 
     bitboards = []
     evaluations = []
 
-    with open(args.file) as f:
-        for line in f:
-            parts = f.readline().split()
+    with open(args.input_file) as f:
+        for line in tqdm(f):
+            parts = f.readline().strip("\n").split(',')
             bitboard = fen_to_bitboards(parts[0])
+            bitboard = torch.tensor(bitboard, dtype=torch.uint8)
             value = parts[1]
 
-            if value is "#":
-                evaluation = math.inf
+            if value[0] == "#":
+                evaluation = 2^12 * int(value[1:])
             else:
                 evaluation = int(value)
+
+            evaluation = max(min(evaluation, 2^16), -2^16)
 
             bitboards.append(bitboard)
             evaluations.append(evaluation)
 
-fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
-bitboards = fen_to_bitboards(fen)
+    os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
+
+    torch.save(bitboards, args.output_file + "bitboards.pt")
+    torch.save(evaluations, args.output_file + "evaluations.pt")
