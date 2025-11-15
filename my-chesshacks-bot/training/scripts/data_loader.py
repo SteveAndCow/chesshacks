@@ -21,13 +21,15 @@ class ChessDataset(Dataset):
         self,
         data_dir: str,
         split: str = "train",
-        transform=None
+        transform=None,
+        max_samples: Optional[int] = None
     ):
         """
         Args:
             data_dir: Directory containing processed data (boards.npy, moves.npy, values.npy)
             split: "train" or "val" (if split files exist)
             transform: Optional data augmentation transform
+            max_samples: Maximum number of samples to load (None = load all)
         """
         data_dir = Path(data_dir)
 
@@ -46,6 +48,13 @@ class ChessDataset(Dataset):
         self.boards = torch.from_numpy(np.load(boards_file)).float()
         self.moves = torch.from_numpy(np.load(moves_file)).long()
         self.values = torch.from_numpy(np.load(values_file)).float()
+
+        # Limit samples if specified
+        if max_samples is not None and max_samples < len(self.boards):
+            print(f"Limiting to first {max_samples:,} samples (out of {len(self.boards):,})")
+            self.boards = self.boards[:max_samples]
+            self.moves = self.moves[:max_samples]
+            self.values = self.values[:max_samples]
 
         print(f"Loaded {len(self.boards)} positions")
         print(f"  Boards shape: {self.boards.shape}")
@@ -79,7 +88,8 @@ def create_data_loaders(
     batch_size: int = 256,
     train_split: float = 0.9,
     num_workers: int = 4,
-    pin_memory: bool = True
+    pin_memory: bool = True,
+    max_samples: Optional[int] = None
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Create train and validation data loaders.
@@ -90,6 +100,7 @@ def create_data_loaders(
         train_split: Fraction of data for training (rest for validation)
         num_workers: Number of worker processes for data loading
         pin_memory: Pin memory for faster GPU transfer
+        max_samples: Maximum number of samples to use (None = use all)
 
     Returns:
         (train_loader, val_loader)
@@ -100,12 +111,12 @@ def create_data_loaders(
     train_boards_file = data_dir / "train_boards.npy"
     if train_boards_file.exists():
         print("Using pre-split train/val data")
-        train_dataset = ChessDataset(data_dir, split="train")
-        val_dataset = ChessDataset(data_dir, split="val")
+        train_dataset = ChessDataset(data_dir, split="train", max_samples=max_samples)
+        val_dataset = ChessDataset(data_dir, split="val", max_samples=max_samples)
     else:
         print("Splitting data into train/val...")
         # Load full dataset
-        full_dataset = ChessDataset(data_dir, split=None)
+        full_dataset = ChessDataset(data_dir, split=None, max_samples=max_samples)
 
         # Split into train/val
         train_size = int(train_split * len(full_dataset))
