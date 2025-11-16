@@ -345,10 +345,6 @@ class MonteCarlo:
                         if node.children:
                             node.expanded = True
 
-                            # Set policy values for children if batch evaluator provided them
-                            # (This would require batch_evaluator to return (values, policies))
-                            # For now, we just mark nodes as expanded
-
                 except Exception as e:
                     # On error, remove virtual losses and fall back to sequential
                     print(f"⚠️ Batch evaluation error: {e}, falling back to sequential")
@@ -445,10 +441,17 @@ def _cached_position_evaluation(fen_hash: str) -> Optional[float]:
 
 # Global position evaluation cache (bypassing lru_cache decorator for manual control)
 POSITION_CACHE = {}
+CACHE_STATS = {"hits": 0, "misses": 0, "total_lookups": 0}
 
 def get_cached_position_eval(fen: str) -> Optional[float]:
     """Get cached evaluation for a position."""
-    return POSITION_CACHE.get(fen)
+    CACHE_STATS["total_lookups"] += 1
+    result = POSITION_CACHE.get(fen)
+    if result is not None:
+        CACHE_STATS["hits"] += 1
+    else:
+        CACHE_STATS["misses"] += 1
+    return result
 
 def cache_position_eval(fen: str, value: float):
     """Cache evaluation for a position with LRU eviction."""
@@ -456,6 +459,15 @@ def cache_position_eval(fen: str, value: float):
         # Simple FIFO eviction (could use more sophisticated LRU)
         POSITION_CACHE.pop(next(iter(POSITION_CACHE)))
     POSITION_CACHE[fen] = value
+
+def print_cache_stats():
+    """Print cache statistics for debugging."""
+    total = CACHE_STATS["total_lookups"]
+    if total > 0:
+        hit_rate = 100 * CACHE_STATS["hits"] / total
+        print(f"📊 Cache: {CACHE_STATS['hits']} hits / {total} lookups ({hit_rate:.1f}% hit rate)")
+    else:
+        print("📊 Cache: No lookups yet")
 
 
 # child_finder: avoid deepcopy by using board.copy() + push and avoid re-iterating generators.
@@ -616,7 +628,31 @@ def test_func(ctx: GameContext):
         base_simulations = min(50, max_simulations)
         print(f"🎯 NORMAL POSITION: {num_legal_moves} legal moves")
 
-    num_simulations = base_simulations
+    # ADAPTIVE SIMULATION BUDGET based on policy entropy (NN confidence)
+    # If NN is confident, use fewer simulations; if uncertain, use more
+    if MODEL_LOADED and move_probs:
+        # Calculate entropy of policy distribution
+        entropy = -sum(p * math.log(p + 1e-8) for p in move_probs.values())
+        max_entropy = math.log(len(move_probs))
+        normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0
+
+        # Adjust simulations based on entropy
+        if normalized_entropy < 0.3:  # Very confident NN
+            entropy_multiplier = 0.5
+            confidence_str = "CONFIDENT"
+        elif normalized_entropy > 0.7:  # Very uncertain NN
+            entropy_multiplier = 1.5
+            confidence_str = "UNCERTAIN"
+        else:
+            entropy_multiplier = 1.0
+            confidence_str = "NORMAL"
+
+        num_simulations = int(base_simulations * entropy_multiplier)
+        num_simulations = min(num_simulations, max_simulations)
+        print(f"📊 NN {confidence_str} (entropy: {normalized_entropy:.2f}), simulations: {base_simulations} → {num_simulations}")
+    else:
+        num_simulations = base_simulations
+
     print(f"🎯 SEARCH MODE: Running {num_simulations} MCTS simulations")
 
     # Build a fen->move map efficiently (single copy + push/pop per move)
@@ -661,6 +697,9 @@ def test_func(ctx: GameContext):
     # quick lookup: use fen map to get the original Move object without performing deep copies
     best_fen = best_child.state.fen()
     best_move = fen_to_move.get(best_fen)
+
+    # Print cache statistics for monitoring performance
+    print_cache_stats()
 
     if best_move:
         print(f"✓ MCTS selected move: {best_move.uci()}")
