@@ -208,12 +208,42 @@ def test_func(ctx: GameContext):
             # Log probabilities for analysis
             ctx.logProbabilities(move_probs)
 
-            # Run MCTS with NN guidance
+            # ========================================
+            # ADAPTIVE TIME MANAGEMENT
+            # Uses MCTS when safe, NN-only when tight
+            # ========================================
+            time_left_ms = ctx.timeLeft
+            print(f"⏱️  Time remaining: {time_left_ms}ms")
+
+            # Strategy: Reserve 300ms overhead, use rest for search
+            # Each MCTS simulation costs ~100ms (NN inference + tree ops)
+            OVERHEAD_MS = 300
+            MS_PER_SIMULATION = 100
+
+            # Calculate safe simulation budget
+            available_time = max(time_left_ms - OVERHEAD_MS, 0)
+            max_simulations = available_time // MS_PER_SIMULATION
+
+            # Decision thresholds
+            MIN_TIME_FOR_MCTS = 800  # Need at least 800ms for any MCTS
+            MIN_SIMULATIONS = 3      # Minimum sims if doing MCTS
+            MAX_SIMULATIONS = 16     # Cap to avoid runaway
+
+            # Decide strategy
+            if time_left_ms < MIN_TIME_FOR_MCTS or max_simulations < MIN_SIMULATIONS:
+                # FAST MODE: Pure NN policy (~100ms)
+                print(f"⚡ FAST MODE: Using NN policy (insufficient time for MCTS)")
+                best_move = max(move_probs.items(), key=lambda x: x[1])[0]
+                return best_move
+
+            # SEARCH MODE: Use MCTS with limited simulations
+            num_simulations = min(max_simulations, MAX_SIMULATIONS)
+            print(f"🎯 SEARCH MODE: Running {num_simulations} MCTS simulations")
+
             montecarlo = MonteCarlo(Node(ctx.board))
             montecarlo.child_finder = child_finder
             montecarlo.node_evaluator = node_evaluator
-            depth = ctx.timeLeft // 8
-            montecarlo.simulate(depth)  # Run MCTS simulations
+            montecarlo.simulate(num_simulations)
 
             # Get best move from MCTS
             best_child = montecarlo.make_choice()
@@ -226,6 +256,7 @@ def test_func(ctx: GameContext):
                     break
 
             if best_move:
+                print(f"✓ MCTS selected move: {best_move.uci()}")
                 return best_move
 
             # Fallback: use NN policy directly
