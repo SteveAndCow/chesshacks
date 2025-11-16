@@ -41,7 +41,7 @@ data_volume = modal.Volume.from_name("chess-training-data", create_if_missing=Tr
 @app.function(
     image=image,
     cpu=4,  # More CPU for faster preprocessing
-    timeout=3600,  # 1 hour max per file
+    timeout=14400,  # 4 hours max per file (enough for large PGN files)
     volumes={"/data": data_volume},
 )
 def preprocess_pgn_file(
