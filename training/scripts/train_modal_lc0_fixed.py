@@ -56,7 +56,7 @@ def train_lc0_model(
     value_loss_weight: float = 1.6,
     moves_left_loss_weight: float = 0.5,
     q_ratio: float = 0.0,
-    hf_repo: str = "your-username/chesshacks-lc0",
+    hf_repo: str = "steveandcow/chesshacks-lc0",
 ):
     """
     Train LC0 model on Modal GPU.
@@ -349,7 +349,7 @@ def main(
     batch_size: int = 256,
     num_filters: int = 128,
     num_residual_blocks: int = 6,
-    hf_repo: str = "your-username/chesshacks-lc0",
+    hf_repo: str = "steveandcow/chesshacks-lc0",
 ):
     """
     Launch LC0 training on Modal.
