@@ -176,15 +176,15 @@ def preprocess_pgn_file(
 
         print(f"Processing {pgn_filename}...")
 
-        pgn_path = Path(f"/data/pgn/{pgn_filename}")
+        pgn_path = Path(f"/data/pgn/chunked/{pgn_filename}")
 
         # Check if file exists
         if not pgn_path.exists():
             print(f"❌ Error: File not found: {pgn_path}")
-            print(f"Volume contents at /data/pgn/:")
+            print(f"Volume contents at /data/pgn/chunked/:")
             import os
-            if Path("/data/pgn").exists():
-                for item in os.listdir("/data/pgn"):
+            if Path("/data/pgn/chunked").exists():
+                for item in os.listdir("/data/pgn/chunked")[:10]:
                     print(f"  - {item}")
             return {"error": f"File not found: {pgn_path}"}
 
@@ -280,7 +280,7 @@ def preprocess_pgn_file(
                 # Save chunk if we have enough positions
                 if len(inputs_list) >= positions_per_file:
                     pgn_name = Path(pgn_filename).stem
-                    output_path = Path(f"/data/lc0_processed/{pgn_name}_chunk{chunk_num:04d}.npz")
+                    output_path = Path(f"/data/lc0_processed_lichess/{pgn_name}_chunk{chunk_num:04d}.npz")
                     output_path.parent.mkdir(parents=True, exist_ok=True)
 
                     np.savez_compressed(
@@ -357,13 +357,18 @@ def preprocess_pgn_file(
 
 
 @app.local_entrypoint()
-def main(min_elo: int = 2000, positions_per_file: int = 50000):
+def main(
+    min_elo: int = 2000,
+    positions_per_file: int = 50000,
+    max_chunks: int = None,
+):
     """
-    Preprocess all PGN files in parallel.
+    Preprocess PGN files in parallel on Modal.
 
     Args:
         min_elo: Minimum ELO rating to include
         positions_per_file: Positions per output file
+        max_chunks: Maximum number of PGN chunks to process (None = all)
     """
     import time
 
@@ -372,25 +377,36 @@ def main(min_elo: int = 2000, positions_per_file: int = 50000):
     print("="*60)
     print(f"Min ELO: {min_elo}")
     print(f"Positions per output file: {positions_per_file:,}")
+    print(f"Max chunks to process: {max_chunks if max_chunks else 'ALL'}")
 
     # List PGN files in volume
     print("\nListing PGN files in volume...")
     pgn_files = list_pgn_files.remote()
 
     if not pgn_files:
-        print("❌ No PGN files found in /data/pgn/")
+        print("❌ No PGN files found in /data/pgn/chunked/")
         print("\nUpload files with:")
-        print("  modal volume put chess-training-data training/data/raw/*.pgn /pgn/")
+        print("  modal volume put chess-training-data training/data/chunked/*.pgn /pgn/chunked/")
         return
 
-    print(f"✅ Found {len(pgn_files)} PGN files")
+    print(f"✅ Found {len(pgn_files)} total PGN files")
+
+    # Limit to max_chunks if specified
+    if max_chunks and max_chunks < len(pgn_files):
+        print(f"⚡ Processing first {max_chunks} chunks (out of {len(pgn_files)})")
+        pgn_files = sorted(pgn_files)[:max_chunks]
+    else:
+        print(f"📋 Processing all {len(pgn_files)} chunks")
+
     for i, f in enumerate(pgn_files[:10]):
         print(f"  {i+1}. {f}")
     if len(pgn_files) > 10:
         print(f"  ... and {len(pgn_files) - 10} more")
 
-    # Process all files in parallel
-    print("\nStarting parallel preprocessing...")
+    # Process files in parallel
+    print("\n🚀 Starting parallel preprocessing...")
+    print(f"   Modal will spawn up to {len(pgn_files)} workers")
+    print(f"   (actual concurrency limited by your account tier)")
     start_time = time.time()
 
     # Use spawn for proper parallel execution with multiple arguments
@@ -430,7 +446,7 @@ def main(min_elo: int = 2000, positions_per_file: int = 50000):
 def list_pgn_files():
     """Helper function to list PGN files in volume."""
     from pathlib import Path
-    pgn_dir = Path("/data/pgn")
+    pgn_dir = Path("/data/pgn/chunked")  # Updated to chunked subdirectory
     if not pgn_dir.exists():
         return []
     return [f.name for f in pgn_dir.glob("*.pgn")]
