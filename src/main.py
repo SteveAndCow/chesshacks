@@ -347,9 +347,8 @@ class MonteCarlo:
                         if value is not None:
                             node.update_win_value(value)
 
-                        # Mark as expanded if it has children
-                        if node.children:
-                            node.expanded = True
+                        # Mark as expanded (prevents redundant evaluation)
+                        node.expanded = True
 
                 except Exception as e:
                     # On error, remove virtual losses and fall back to sequential
@@ -377,8 +376,8 @@ class MonteCarlo:
                 # clear rollout-created children to reduce memory (original behavior)
                 child.children = []
 
-        if node.children:
-            node.expanded = True
+        # Mark as expanded (even terminal nodes with no children)
+        node.expanded = True
 
     def _random_rollout_iter(self, node: Node):
         """Iterative random rollout until evaluator returns a value. Avoid recursion."""
