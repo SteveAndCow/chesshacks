@@ -38,7 +38,7 @@ data_volume = modal.Volume.from_name("chess-training-data", create_if_missing=Tr
 
 @app.function(
     image=image,
-    gpu="T4",  # or "A10G" for faster, "H100" for fastest
+    gpu="A10G",  # A10G = 2x faster than T4, best value for hackathon
     timeout=3600 * 6,  # 6 hours max
     volumes={"/data": data_volume},
     secrets=[
@@ -135,7 +135,7 @@ def train_lc0_model(
         train_loader, val_loader = create_train_val_loaders(
             data_dir=data_dir,
             batch_size=batch_size,
-            train_split=0.9,
+            train_split=0.95,  # Use more data for training (95% vs 90%)
             shuffle_buffer_size=100000,
             num_workers=0,  # Modal handles parallelism
             streaming=True
