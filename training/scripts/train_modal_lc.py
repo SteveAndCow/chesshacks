@@ -173,20 +173,7 @@ def train_model(config_dict: dict):
 
             optimizer.zero_grad()
 
-            policy_logits, value_pred, result_logits = model(boards)
-
-            # Convert continuous values to result classes (loss=0, draw=1, win=2)
-            result_targets = torch.zeros(values.size(0), dtype=torch.long, device=device)
-            result_targets[values[:, 0] < -0.3] = 0  # loss
-            result_targets[(values[:, 0] >= -0.3) & (values[:, 0] <= 0.3)] = 1  # draw
-            result_targets[values[:, 0] > 0.3] = 2  # win
-
-            p_loss = policy_criterion(policy_logits, moves)
-            v_loss = value_criterion(value_pred, values)
-            r_loss = policy_criterion(result_logits, result_targets)  # Use CrossEntropyLoss
-
-            result_weight = training_config.get("result_weight", 0.5)
-            loss = policy_weight * p_loss + value_weight * v_loss + result_weight * r_loss
+            loss = model
 
             loss.backward()
             optimizer.step()
@@ -213,19 +200,36 @@ def train_model(config_dict: dict):
                 moves = moves.to(device)
                 values = values.to(device).unsqueeze(1)
 
-                loss, policy_logits = model.training_step(boards, moves, values)
+                policy_logits, value_pred, result_logits = model(boards)
+
+                # Convert continuous values to result classes
+                result_targets = torch.zeros(values.size(0), dtype=torch.long, device=device)
+                result_targets[values[:, 0] < -0.3] = 0  # loss
+                result_targets[(values[:, 0] >= -0.3) & (values[:, 0] <= 0.3)] = 1  # draw
+                result_targets[values[:, 0] > 0.3] = 2  # win
+
+                p_loss = policy_criterion(policy_logits, moves)
+                v_loss = value_criterion(value_pred, values)
+                r_loss = policy_criterion(result_logits, result_targets)
+
+                loss = policy_weight * p_loss + value_weight * v_loss + result_weight * r_loss
 
                 val_loss += loss.item()
+                val_policy_loss += p_loss.item()
+                val_value_loss += v_loss.item()
 
                 predicted = torch.argmax(policy_logits, dim=1)
                 correct += (predicted == moves).sum().item()
                 total += moves.size(0)
 
         val_loss /= len(val_loader)
+        val_policy_loss /= len(val_loader)
+        val_value_loss /= len(val_loader)
         accuracy = correct / total
 
         # Log results
         print(f"\nTrain - Loss: {train_loss:.4f}, Policy: {train_policy_loss:.4f}, Value: {train_value_loss:.4f}")
+        print(f"Val   - Loss: {val_loss:.4f}, Policy: {val_policy_loss:.4f}, Value: {val_value_loss:.4f}")
         print(f"Val Accuracy: {accuracy:.4f}")
 
         # Update learning rate
