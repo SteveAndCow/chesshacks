@@ -1,7 +1,7 @@
 ﻿import torch
 from torch import nn
 from torch.nn import functional as F
-import lc0_policy_map
+from . import lc0_policy_map
 
 
 class SqueezeExcitation(nn.Module):
