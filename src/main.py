@@ -212,7 +212,8 @@ def test_func(ctx: GameContext):
             montecarlo = MonteCarlo(Node(ctx.board))
             montecarlo.child_finder = child_finder
             montecarlo.node_evaluator = node_evaluator
-            montecarlo.simulate(256)  # Run MCTS simulations
+            depth = ctx.timeLeft // 8
+            montecarlo.simulate(depth)  # Run MCTS simulations
 
             # Get best move from MCTS
             best_child = montecarlo.make_choice()
