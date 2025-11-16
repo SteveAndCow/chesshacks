@@ -129,7 +129,7 @@ def train_lc0_model(
 
     # Load data
     print("\n📊 Loading data...")
-    data_dir = "/data/lc0_processed"
+    data_dir = "/data/lc0_processed_lichess"
 
     if not Path(data_dir).exists():
         print(f"⚠️  Data not found at {data_dir}")

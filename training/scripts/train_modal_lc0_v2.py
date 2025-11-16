@@ -151,7 +151,7 @@ def train_lc0_model(
 
     # Load data
     print("\n📊 Loading data...")
-    data_dir = "/data/lc0_processed"
+    data_dir = "/data/lc0_processed_lichess"
 
     if not Path(data_dir).exists():
         print(f"⚠️  Data not found at {data_dir}")
@@ -528,6 +528,8 @@ def main(
     batch_size: int = 256,
     num_filters: int = 128,
     num_residual_blocks: int = 6,
+    learning_rate: float = 0.001,
+    dropout: float = 0.15,
     hf_repo: str = "steveandcow/chesshacks-lc0",
     max_positions: int = None,  # Limit dataset size (None = all)
 ):
@@ -539,6 +541,8 @@ def main(
         batch_size: Batch size
         num_filters: Number of filters (128 recommended)
         num_residual_blocks: Number of blocks (6-10 recommended)
+        learning_rate: Learning rate (0.001 default, 0.0008 for deeper models)
+        dropout: Dropout rate (0.15 default, 0.18 for deeper models)
         hf_repo: HuggingFace repo ID (e.g., "username/chesshacks-lc0")
         max_positions: Max positions to train on. Examples:
                       - 1000000 (1M): Fast baseline
@@ -550,8 +554,9 @@ def main(
     print(f"  - Epochs: {num_epochs}")
     print(f"  - Batch size: {batch_size}")
     print(f"  - Architecture: {num_filters}x{num_residual_blocks}")
+    print(f"  - Learning rate: {learning_rate}")
+    print(f"  - Dropout: {dropout}")
     print(f"  - HuggingFace repo: {hf_repo}")
-    print(f"  - Dropout: 0.15 (increased)")
     print(f"  - Patience: 6 (increased)")
     print(f"  - LR schedule: warmup + slower cosine")
     if max_positions:
@@ -564,6 +569,8 @@ def main(
         batch_size=batch_size,
         num_filters=num_filters,
         num_residual_blocks=num_residual_blocks,
+        learning_rate=learning_rate,
+        dropout=dropout,
         hf_repo=hf_repo,
         max_positions=max_positions
     )

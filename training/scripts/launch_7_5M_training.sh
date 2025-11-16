@@ -19,16 +19,6 @@ echo "📊 Training: 7 epochs × 7.5M = 52.5M position-epochs"
 echo "💰 Cost: ~$15-20 for 3x H100 GPUs"
 echo ""
 
-# Check Modal is logged in
-if ! modal token current &>/dev/null; then
-    echo "❌ Modal not authenticated!"
-    echo "   Run: modal token new"
-    exit 1
-fi
-
-echo "✅ Modal authenticated"
-echo ""
-
 # Check HuggingFace secret exists
 if ! modal secret list | grep -q "huggingface-secret"; then
     echo "⚠️  WARNING: huggingface-secret not found!"
@@ -67,33 +57,38 @@ echo ""
 sleep 5
 
 echo "📊 MODEL 2: LC0 128x10 (Deeper - STRONGEST)"
-echo "   Expected: 2.8-3.0 hours (7 epochs)"
-echo "   Log: training/logs/model2_128x10_7ep_${TIMESTAMP}.log"
+echo "   Expected: 2.8-3.0 hours (8 epochs)"
+echo "   Optimizations: Lower LR (0.0008), Higher dropout (0.18)"
+echo "   Log: training/logs/model2_128x10_8ep_${TIMESTAMP}.log"
 echo ""
 nohup modal run training/scripts/train_modal_lc0_v2.py \
-    --num-epochs 7 \
+    --num-epochs 8 \
     --batch-size 256 \
     --num-filters 128 \
     --num-residual-blocks 10 \
+    --learning-rate 0.0008 \
+    --dropout 0.18 \
     --hf-repo steveandcow/chesshacks-lc0 \
-    > training/logs/model2_128x10_7ep_${TIMESTAMP}.log 2>&1 &
+    > training/logs/model2_128x10_8ep_${TIMESTAMP}.log 2>&1 &
 MODEL2_PID=$!
 echo "   ✅ Launched (PID: $MODEL2_PID)"
 echo ""
 sleep 5
 
 echo "📊 MODEL 3: Transformer 256x6h8 (Hybrid LC0+Transformer)"
-echo "   Expected: 2.5-2.8 hours (7 epochs)"
-echo "   Log: training/logs/model3_transformer_7ep_${TIMESTAMP}.log"
+echo "   Expected: 3.0-3.3 hours (8 epochs)"
+echo "   Optimizations: Smaller batch (192), Higher LR (0.0012)"
+echo "   Log: training/logs/model3_transformer_8ep_${TIMESTAMP}.log"
 echo ""
 nohup modal run training/scripts/train_modal_transformer_lc0.py \
-    --num-epochs 7 \
-    --batch-size 256 \
+    --num-epochs 8 \
+    --batch-size 192 \
     --num-filters 256 \
     --num-blocks 6 \
     --heads 8 \
+    --learning-rate 0.0012 \
     --hf-repo steveandcow/chesshacks-lc0 \
-    > training/logs/model3_transformer_7ep_${TIMESTAMP}.log 2>&1 &
+    > training/logs/model3_transformer_8ep_${TIMESTAMP}.log 2>&1 &
 MODEL3_PID=$!
 echo "   ✅ Launched (PID: $MODEL3_PID)"
 echo ""

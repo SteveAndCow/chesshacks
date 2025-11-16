@@ -24,6 +24,7 @@ image = (
         "tqdm",
         "huggingface-hub",
         "pytorch-lightning",
+        "python-chess",
     )
     .add_local_dir(
         local_path="src/models",
@@ -143,7 +144,7 @@ def train_transformer_model(
 
     # Load data
     print("\n📊 Loading data...")
-    data_dir = "/data/lc0_processed"
+    data_dir = "/data/lc0_processed_lichess"
 
     if not Path(data_dir).exists():
         print(f"⚠️  Data not found at {data_dir}")
@@ -504,6 +505,7 @@ def main(
     num_filters: int = 256,
     num_blocks: int = 6,
     heads: int = 8,
+    learning_rate: float = 0.001,
     hf_repo: str = "steveandcow/chesshacks-lc0",
     max_positions: int = None,  # Limit dataset size (None = all)
 ):
@@ -516,6 +518,7 @@ def main(
         num_filters: Embedding dimension (256 recommended)
         num_blocks: Number of transformer blocks (6-12 recommended)
         heads: Number of attention heads (8 recommended)
+        learning_rate: Learning rate (0.001 default, 0.0012 for transformers)
         hf_repo: HuggingFace repo ID
         max_positions: Max positions to train on. Examples:
                       - 1000000 (1M): Fast baseline
@@ -527,6 +530,7 @@ def main(
     print(f"  - Epochs: {num_epochs}")
     print(f"  - Batch size: {batch_size}")
     print(f"  - Architecture: {num_filters}x{num_blocks} transformer (heads={heads})")
+    print(f"  - Learning rate: {learning_rate}")
     print(f"  - HuggingFace repo: {hf_repo}")
     print(f"  - Dropout: 0.15 (increased)")
     print(f"  - Patience: 6 (increased)")
@@ -541,6 +545,7 @@ def main(
         num_filters=num_filters,
         num_blocks=num_blocks,
         heads=heads,
+        learning_rate=learning_rate,
         hf_repo=hf_repo,
         max_positions=max_positions
     )
