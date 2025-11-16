@@ -415,7 +415,7 @@ import os
 #   - latest_v2_128x6.pt (small/fast model for Slot 1)
 #   - latest_v2_256x10.pt (large/strong model for Slot 2)
 #   - latest_transformer_v2_256x6h8.pt (transformer model for Slot 3)
-MODEL_FILE = os.getenv("CHESS_MODEL_FILE", "lc0_128x6.pt")
+MODEL_FILE = os.getenv("CHESS_MODEL_FILE", "lc0_128x8_epoch1.pt")
 print(f"📦 Selected model: {MODEL_FILE}")
 
 model_loader = LC0ModelLoader(

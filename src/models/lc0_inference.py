@@ -123,7 +123,7 @@ class LC0ModelLoader:
         try:
             from huggingface_hub import hf_hub_download
 
-            print(f"📥 Loading LC0 model from HuggingFace: {self.repo_id}/checkpoints/{self.model_file}")
+            print(f"📥 Loading LC0 model from HuggingFace: {self.repo_id}/{self.model_file}")
 
             # Download model file (cached automatically by HF)
             model_path = hf_hub_download(
