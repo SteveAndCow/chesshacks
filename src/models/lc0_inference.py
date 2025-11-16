@@ -44,11 +44,26 @@ def board_to_112_channels(board: chess.Board) -> np.ndarray:
         channels.append(np.full(64, 8, dtype=np.float32))
 
     # 5 unit planes (castling rights + side to move)
-    channels.append(np.full(64, float(board.has_kingside_castling_rights(board.turn))))
-    channels.append(np.full(64, float(board.has_queenside_castling_rights(board.turn))))
-    channels.append(np.full(64, float(board.has_kingside_castling_rights(not board.turn))))
-    channels.append(np.full(64, float(board.has_queenside_castling_rights(not board.turn))))
-    channels.append(np.full(64, 1.0 if board.turn == chess.WHITE else 0.0))
+    channels.append(np.full(
+        64, float(board.has_kingside_castling_rights(board.turn)),
+        dtype=np.float32
+    ))
+    channels.append(np.full(
+        64, float(board.has_queenside_castling_rights(board.turn)),
+        dtype=np.float32
+    ))
+    channels.append(np.full(
+        64, float(board.has_kingside_castling_rights(not board.turn)),
+        dtype=np.float32
+    ))
+    channels.append(np.full(
+        64, float(board.has_queenside_castling_rights(not board.turn)),
+        dtype=np.float32
+    ))
+    channels.append(np.full(
+        64, 1.0 if board.turn == chess.WHITE else 0.0,
+        dtype=np.float32
+    ))
 
     # 1 rule50 plane
     channels.append(np.full(64, board.halfmove_clock / 99.0, dtype=np.float32))

@@ -21,15 +21,19 @@ class Node:
         self.parent = None
         self.children = []
         self.expanded = False
-        self.player_number = None
         self.discovery_factor = 0.35
 
     def update_win_value(self, value):
+        """
+        Update node value and backpropagate up the tree.
+        CRITICAL: Values are negated when going up (opponent's perspective).
+        """
         self.win_value += value
         self.visits += 1
 
         if self.parent:
-            self.parent.update_win_value(value)
+            # Negate value for parent (opponent's turn)
+            self.parent.update_win_value(-value)
 
     def update_policy_value(self, value):
         self.policy_value = value
@@ -42,12 +46,12 @@ class Node:
         for child in children:
             self.add_child(child)
 
-    def get_preferred_child(self, root_node):
+    def get_preferred_child(self):
         best_children = []
         best_score = float('-inf')
 
         for child in self.children:
-            score = child.get_score(root_node)
+            score = child.get_score()
             if score > best_score:
                 best_score = score
                 best_children = [child]
@@ -56,23 +60,21 @@ class Node:
 
         return random.choice(best_children)
 
-    def get_score(self, root_node):
-        discovery_operand = self.discovery_factor * (self.policy_value or 1) * sqrt(log(self.parent.visits or 1) / (self.visits or 1))
-        win_multiplier = 1 if self.parent.player_number == root_node.player_number else -1
-        win_operand = win_multiplier * self.win_value / (self.visits or 1)
-        self.score = win_operand + discovery_operand
+    def get_score(self):
+        """
+        UCB1 score for MCTS node selection.
+        Balances exploitation (win rate) vs exploration (visit count).
+        """
+        # Exploration term (UCB formula)
+        exploration = self.discovery_factor * (self.policy_value or 1) * \
+            sqrt(log(self.parent.visits or 1) / (self.visits or 1))
 
-        self.score += len(list(self.state.generate_legal_moves()))
+        # Exploitation term (average value from this node's perspective)
+        # Values are already negated during backprop, so parent's perspective
+        # is automatically correct
+        exploitation = self.win_value / (self.visits or 1)
 
-        pawns = self.state.pawns.bit_count() * 1
-        knights = self.state.knights.bit_count() * 3
-        bishops = self.state.bishops.bit_count() * 3
-        rooks = self.state.rooks.bit_count() * 5
-        queens = self.state.queens.bit_count() * 9
-
-        piece_score = pawns + knights + bishops + rooks + queens
-
-        return self.score + piece_score / 40.0
+        return exploitation + exploration
 
     def is_scorable(self):
         return self.visits or self.policy_value != None
@@ -129,7 +131,7 @@ class MonteCarlo:
         for i in range(expansion_count):
             current_node = self.root_node
             while current_node.expanded:
-                current_node = current_node.get_preferred_child(self.root_node)
+                current_node = current_node.get_preferred_child()
 
             self.expand(current_node)
 
@@ -142,7 +144,7 @@ class MonteCarlo:
         self.child_finder(node, self)
 
         for child in node.children:
-            child_win_value = self.node_evaluator(child, self)
+            child_win_value = self.node_evaluator(child)
 
             if child_win_value != None:
                 child.update_win_value(child_win_value)
@@ -159,7 +161,7 @@ class MonteCarlo:
         child = random.choice(node.children)
         node.children = []
         node.add_child(child)
-        child_win_value = self.node_evaluator(child, self)
+        child_win_value = self.node_evaluator(child)
 
         if child_win_value != None:
             node.update_win_value(child_win_value)
@@ -201,33 +203,52 @@ def child_finder(node, montecarlo):
         child = Node(new_board, move=move)  # Store move for O(1) lookup
         node.add_child(child)
 
-def node_evaluator(node, montecarlo):
-    """Evaluate node value using NN with transposition table caching."""
+def node_evaluator(node):
+    """
+    Evaluate node value from the perspective of the player to move at this node.
+
+    Returns:
+        Value in [-1, 1] where:
+        +1 = winning for player to move
+        -1 = losing for player to move
+        0 = even position
+    """
     global cache_hits, cache_misses
 
-    if node.state.is_variant_win():
-        return math.inf
-    elif node.state.is_variant_loss():
-        return -math.inf
+    # CRITICAL: Check terminal states first!
+    if node.state.is_checkmate():
+        # Current player is checkmated = loss for them
+        return -1.0
+    elif node.state.is_stalemate() or node.state.is_insufficient_material():
+        # Draw
+        return 0.0
 
     # Use neural network for position evaluation if available
     if MODEL_LOADED:
         try:
             # Check transposition table first
+            # NOTE: We cache based on FEN which includes turn,
+            # so we don't need to adjust perspective
             fen = node.state.fen()
             if fen in position_cache:
                 cache_hits += 1
                 return position_cache[fen]
 
             cache_misses += 1
+
+            # NN returns value from current player's perspective
+            # (the player whose turn it is at this position)
+            # This is exactly what we need! No adjustment required.
             value = model_loader.evaluate_position(node.state)
+
             position_cache[fen] = value  # Cache for future lookups
             return value
         except Exception as e:
             print(f"⚠️ NN evaluation failed: {e}")
             pass
 
-    return node.get_score(montecarlo.root_node)
+    # Fallback: return 0 (neutral) if no evaluation available
+    return 0.0
 
 
 def calculate_move_budget(board, time_left_ms):
