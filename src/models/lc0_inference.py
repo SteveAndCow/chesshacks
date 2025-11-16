@@ -88,7 +88,7 @@ class LC0ModelLoader:
     def __init__(
         self,
         repo_id: str = "steveandcow/chesshacks-lc0",
-        model_file: str = "lc0_128x6.pt",
+        model_file: str = "lc0_128x8_epoch1.pt",
         cache_dir: str = "./.model_cache",
         device: Optional[str] = None
     ):
@@ -100,7 +100,7 @@ class LC0ModelLoader:
             device: "cuda", "cpu", or None (auto-detect)
         """
         self.repo_id = repo_id
-        self.model_file = model_file
+        self.model_file = f"checkpoints/{model_file}"
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -123,7 +123,7 @@ class LC0ModelLoader:
         try:
             from huggingface_hub import hf_hub_download
 
-            print(f"📥 Loading LC0 model from HuggingFace: {self.repo_id}/{self.model_file}")
+            print(f"📥 Loading LC0 model from HuggingFace: {self.repo_id}/checkpoints/{self.model_file}")
 
             # Download model file (cached automatically by HF)
             model_path = hf_hub_download(
