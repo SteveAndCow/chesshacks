@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Tuple, Dict, Optional
 import sys
 import os
+import time
 
 # Add training scripts to path for model imports
 training_scripts = Path(__file__).parent.parent.parent / "training" / "scripts"
@@ -32,7 +33,8 @@ class ChessModelLoader:
         repo_id: str = "steveandcow/chesshacks-bot",
         model_name: str = "cnn_baseline",
         cache_dir: str = "./.model_cache",
-        device: Optional[str] = None
+        device: Optional[str] = None,
+        use_fp16: bool = True  # Enable FP16 for 2x speedup
     ):
         """
         Args:
@@ -40,11 +42,13 @@ class ChessModelLoader:
             model_name: Name of model file (without .pt extension)
             cache_dir: Local cache directory for downloaded models
             device: "cuda", "cpu", or None (auto-detect)
+            use_fp16: Use FP16 (half precision) for faster inference
         """
         self.repo_id = repo_id
         self.model_name = model_name
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.use_fp16 = use_fp16
 
         # Auto-detect device
         if device is None:
@@ -126,11 +130,17 @@ class ChessModelLoader:
         model = model.to(self.device)
         model.eval()
 
+        # Apply FP16 optimization for 2x speedup
+        if self.use_fp16:
+            model = model.half()
+            print("🚀 FP16 optimization enabled (2x faster inference)")
+
         self.model = model
 
         print(f"✅ Model loaded on {self.device}")
         print(f"Architecture: {model.get_architecture_name()}")
         print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
+        print(f"Precision: {'FP16' if self.use_fp16 else 'FP32'}")
 
         return model
 
@@ -196,17 +206,25 @@ class ChessModelLoader:
 
         # Convert to torch and add batch dimension
         tensor = torch.from_numpy(tensor).unsqueeze(0)  # (1, 16, 8, 8)
-        return tensor.to(self.device)
+        tensor = tensor.to(self.device)
+
+        # Convert to FP16 if enabled
+        if self.use_fp16:
+            tensor = tensor.half()
+
+        return tensor
 
     def predict(
         self,
-        board: chess.Board
+        board: chess.Board,
+        profile: bool = False
     ) -> Tuple[Dict[chess.Move, float], float]:
         """
         Predict move probabilities and position value for a board.
 
         Args:
             board: Chess board to evaluate
+            profile: If True, print detailed timing information
 
         Returns:
             (move_probs, value) where:
@@ -216,14 +234,23 @@ class ChessModelLoader:
         if self.model is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
+        start_time = time.time() if profile else None
+
         # Convert board to tensor
+        t0 = time.time() if profile else None
         board_tensor = self.board_to_tensor(board)
+        if profile:
+            print(f"   [Inference] Board->tensor: {(time.time() - t0)*1000:.1f}ms")
 
         # Run inference
+        t0 = time.time() if profile else None
         with torch.no_grad():
             policy_logits, value_pred, result_logits = self.model(board_tensor)
+        if profile:
+            print(f"   [Inference] NN forward:    {(time.time() - t0)*1000:.1f}ms")
 
         # Convert policy logits to probabilities
+        t0 = time.time() if profile else None
         policy_probs = torch.softmax(policy_logits[0], dim=0)  # (4096,)
 
         # Map probabilities to legal moves only
@@ -243,6 +270,10 @@ class ChessModelLoader:
 
         # Extract value
         value = value_pred[0, 0].item()  # Scalar in [-1, 1]
+
+        if profile:
+            print(f"   [Inference] Post-process:  {(time.time() - t0)*1000:.1f}ms")
+            print(f"   [Inference] TOTAL:         {(time.time() - start_time)*1000:.1f}ms")
 
         return move_probs, value
 
