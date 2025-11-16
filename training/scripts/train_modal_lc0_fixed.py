@@ -38,7 +38,7 @@ data_volume = modal.Volume.from_name("chess-training-data", create_if_missing=Tr
 
 @app.function(
     image=image,
-    gpu="A10G",  # A10G = 2x faster than T4, best value for hackathon
+    gpu="H100",  # H100 = 8-10x faster than T4, FASTEST for hackathon deadline
     timeout=3600 * 6,  # 6 hours max
     volumes={"/data": data_volume},
     secrets=[
@@ -110,6 +110,10 @@ def train_lc0_model(
         optimizer="adam",
         learning_rate=learning_rate
     ).to(device)
+
+    # Compile model for 20-30% speedup (PyTorch 2.0+)
+    print("🔥 Compiling model with torch.compile()...")
+    model = torch.compile(model, mode="reduce-overhead")
 
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
