@@ -1,12 +1,12 @@
 # ========================================
 # DEPLOYMENT REQUIREMENTS (ChessHacks Platform)
-# Optimized for fast builds with uv package installer
 # ========================================
+#
+# NOTE: torch, numpy, torchvision are PRE-INSTALLED on the platform
+# DO NOT include them here or build will timeout!
 #
 # For training/development, use: pip install -r requirements-train.txt
 #
-# Note: Using regular PyTorch (not CPU-only) because platform uses 'uv'
-# which doesn't support --extra-index-url the same way as pip
 # ========================================
 
 # API Server
@@ -24,7 +24,5 @@ typing_extensions==4.15.0
 # Chess Engine
 python-chess==1.999
 
-# Neural Network (pinned versions for faster install)
-torch==2.0.1
-numpy==1.24.3
-huggingface-hub==0.20.3
+# Model Loading (torch/numpy are pre-installed)
+huggingface-hub>=0.20.0
