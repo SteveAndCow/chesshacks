@@ -88,7 +88,7 @@ class LC0ModelLoader:
     def __init__(
         self,
         repo_id: str = "steveandcow/chesshacks-lc0",
-        model_file: str = "lc0_128x8_epoch1.pt",
+        model_file: str = "lc0_v2_128x8_ep3_loss3.8281_20251116_153908.pt",
         cache_dir: str = "./.model_cache",
         device: Optional[str] = None
     ):
