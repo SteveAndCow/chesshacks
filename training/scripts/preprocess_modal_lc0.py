@@ -117,10 +117,14 @@ def preprocess_pgn_file(
 
             return np.stack(channels).reshape(112, 8, 8)
 
-        def move_to_policy_index(move: chess.Move) -> int:
+        def move_to_policy_index(move: chess.Move, turn: chess.Color) -> int:
             """
             Convert move to LC0 policy index (0-1857).
-            Uses proper LC0 policy mapping.
+            Uses proper LC0 policy mapping with board flipping for black.
+
+            Args:
+                move: The chess move
+                turn: Current side to move (WHITE or BLACK)
             """
             # Import policy_index from models directory (copied to /root/models in container)
             import sys
@@ -128,14 +132,22 @@ def preprocess_pgn_file(
                 sys.path.insert(0, '/root/models')
             from policy_index import policy_index
 
-            # Convert move to UCI format
-            move_str = move.uci()
+            # LC0 always encodes from the current player's perspective
+            # For black, we need to flip the board (mirror vertically and horizontally)
+            if turn == chess.BLACK:
+                # Flip the move coordinates
+                from_square = chess.square_mirror(move.from_square)
+                to_square = chess.square_mirror(move.to_square)
+                flipped_move = chess.Move(from_square, to_square, move.promotion)
+                move_str = flipped_move.uci()
+            else:
+                move_str = move.uci()
 
             # Handle promotions (LC0 only encodes queen, rook, bishop - knight is encoded as normal move)
             if move.promotion:
                 if move.promotion == chess.KNIGHT:
                     # Knight promotions use base move notation without suffix
-                    move_str = move.uci()[:4]
+                    move_str = move_str[:4]
                 else:
                     # Queen, Rook, Bishop promotions include suffix
                     promo_map = {
@@ -143,14 +155,14 @@ def preprocess_pgn_file(
                         chess.ROOK: 'r',
                         chess.BISHOP: 'b'
                     }
-                    move_str = move.uci()[:4] + promo_map[move.promotion]
+                    move_str = move_str[:4] + promo_map[move.promotion]
 
             # Find the index in policy_index
             try:
                 return policy_index.index(move_str)
             except ValueError:
                 # Fallback for unexpected moves (shouldn't happen with legal moves)
-                print(f"Warning: Move {move_str} not found in LC0 policy index")
+                print(f"Warning: Move {move_str} (original: {move.uci()}, turn: {'BLACK' if turn == chess.BLACK else 'WHITE'}) not found in LC0 policy index")
                 return 0
 
         def game_result_to_wdl(result: str, pov_color: chess.Color) -> np.ndarray:
@@ -239,7 +251,7 @@ def preprocess_pgn_file(
 
                         # Policy target (proper LC0 1858 encoding)
                         policy = np.zeros(1858, dtype=np.float32)
-                        move_idx = move_to_policy_index(move)
+                        move_idx = move_to_policy_index(move, board.turn)
                         policy[move_idx] = 1.0
                         policies_list.append(policy)
 
