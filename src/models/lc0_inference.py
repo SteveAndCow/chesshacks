@@ -150,16 +150,22 @@ class LC0ModelLoader:
             se_ratio=config.get('se_ratio', 8)
         )
 
-        # Load weights
-        model.load_state_dict(checkpoint['model_state_dict'])
+        # Load weights - handle torch.compile() prefix
+        state_dict = checkpoint['model_state_dict']
+
+        # Strip '_orig_mod.' prefix added by torch.compile()
+        if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
+            state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+
+        model.load_state_dict(state_dict)
         model = model.to(self.device)
         model.eval()
 
         self.model = model
 
-        # Load policy mapping
-        from .lc0_policy_map import make_map
-        self.policy_map = make_map()
+        # Build policy map for move decoding (UCI string -> policy index)
+        from .policy_index import policy_index
+        self.policy_map = {move: idx for idx, move in enumerate(policy_index)}
 
         print(f"✅ LC0 model loaded on {self.device}")
         print(f"Architecture: {config.get('num_filters', 128)}x{config.get('num_residual_blocks', 6)}")

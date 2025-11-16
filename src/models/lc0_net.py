@@ -1,14 +1,13 @@
 """
-Lightweight LC0 network for inference only (no PyTorch Lightning dependency).
+Lightweight LC0 network for inference only (matches training architecture exactly).
 
-This is a stripped-down version of lccnn.py that only includes the forward pass.
+This is copied from pt_layers.py and lccnn.py but without PyTorch Lightning.
 """
 import torch
 from torch import nn
 from torch.nn import functional as F
 from typing import NamedTuple
 from collections import OrderedDict
-from math import sqrt
 
 
 class ModelOutput(NamedTuple):
@@ -20,93 +19,125 @@ class ModelOutput(NamedTuple):
 class SqueezeExcitation(nn.Module):
     def __init__(self, channels, se_ratio):
         super().__init__()
-        se_channels = channels // se_ratio
-        self.fc1 = nn.Linear(channels, se_channels)
-        self.fc2 = nn.Linear(se_channels, 2 * channels)
+        self.se_ratio = se_ratio
+        self.pooler = nn.AdaptiveAvgPool2d(1)
+        self.squeeze = nn.Sequential(
+            nn.Linear(channels, int(channels // se_ratio), bias=False), nn.ReLU()
+        )
+        self.expand = nn.Linear(int(channels // se_ratio), channels * 2, bias=False)
+        self.channels = channels
+        nn.init.xavier_normal_(self.squeeze[0].weight)
+        nn.init.xavier_normal_(self.expand.weight)
 
     def forward(self, x):
-        # x: (batch, channels, 8, 8)
-        pooled = x.mean(dim=[2, 3])  # Global average pooling
-        fc1_out = F.relu(self.fc1(pooled))
-        fc2_out = self.fc2(fc1_out)
-
-        # Split into weight and bias
-        w, b = fc2_out[:, :x.shape[1]], fc2_out[:, x.shape[1]:]
-        w = w.unsqueeze(-1).unsqueeze(-1)
-        b = b.unsqueeze(-1).unsqueeze(-1)
-
-        return torch.sigmoid(w) * x + b
+        pooled = self.pooler(x).view(-1, self.channels)
+        squeezed = self.squeeze(pooled)
+        expanded = self.expand(squeezed).view(-1, self.channels * 2, 1, 1)
+        gammas, betas = torch.split(expanded, self.channels, dim=1)
+        gammas = torch.sigmoid(gammas)
+        return gammas * x + betas
 
 
 class ConvBlock(nn.Module):
-    def __init__(self, input_channels, filter_size, output_channels):
+    def __init__(self, input_channels, output_channels, filter_size):
         super().__init__()
-        padding = filter_size // 2
-        self.conv = nn.Conv2d(
-            input_channels, output_channels,
-            kernel_size=filter_size, padding=padding, bias=False
+        self.conv_layer = nn.Conv2d(
+            input_channels, output_channels, filter_size, bias=False, padding="same"
         )
-        self.bn = nn.BatchNorm2d(output_channels)
+        self.conv_layer.weight.clamp_weights = True
+        self.batchnorm = nn.BatchNorm2d(output_channels, affine=True)
+        nn.init.xavier_normal_(self.conv_layer.weight)
 
-    def forward(self, x):
-        return F.relu(self.bn(self.conv(x)))
+    def forward(self, inputs):
+        out = self.conv_layer(inputs)
+        out = self.batchnorm(out.float())
+        return F.relu(out)
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, num_filters, se_ratio):
+    def __init__(self, channels, se_ratio):
         super().__init__()
-        self.conv1 = nn.Conv2d(num_filters, num_filters, kernel_size=3, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(num_filters)
-        self.conv2 = nn.Conv2d(num_filters, num_filters, kernel_size=3, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(num_filters)
-        self.se = SqueezeExcitation(num_filters, se_ratio) if se_ratio > 0 else None
+        self.conv1 = nn.Conv2d(
+            channels,
+            channels,
+            3,
+            bias=False,
+            padding="same",
+        )
+        self.conv1.weight.clamp_weights = True
+        self.batch_norm = nn.BatchNorm2d(channels, affine=True)
+        self.conv2 = nn.Conv2d(
+            channels,
+            channels,
+            3,
+            bias=False,
+            padding="same",
+        )
+        self.conv2.weight.clamp_weights = True
+        nn.init.xavier_normal_(self.conv1.weight)
+        nn.init.xavier_normal_(self.conv2.weight)
+        self.squeeze_excite = SqueezeExcitation(channels, se_ratio)
 
-    def forward(self, x):
-        residual = x
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        if self.se is not None:
-            out = self.se(out)
-        out += residual
-        return F.relu(out)
+    def forward(self, inputs):
+        out1 = self.conv1(inputs)
+        out1 = F.relu(self.batch_norm(out1.float()))
+        out2 = self.conv2(out1)
+        out2 = self.squeeze_excite(out2)
+        return F.relu(inputs + out2)
 
 
 class ConvolutionalPolicyHead(nn.Module):
     def __init__(self, num_filters):
         super().__init__()
-        self.conv = nn.Conv2d(num_filters, 80, kernel_size=3, padding=1, bias=False)
-        self.bn = nn.BatchNorm2d(80)
-        # LC0 policy: 1858 possible moves
-        self.fc = nn.Linear(80 * 8 * 8, 1858)
+        self.conv_block = ConvBlock(
+            filter_size=3, input_channels=num_filters, output_channels=num_filters
+        )
+        # No l2_reg on the final convolution
+        self.conv = nn.Conv2d(num_filters, 80, 3, bias=True, padding="same")
+        nn.init.xavier_normal_(self.conv.weight)
 
-    def forward(self, x):
-        x = F.relu(self.bn(self.conv(x)))
-        x = x.reshape(x.shape[0], -1)  # Flatten
-        return self.fc(x)
+        # Import policy map - make it a non-trainable parameter
+        from .lc0_policy_map import make_map
+        policy_map_array = make_map()
+        self.fc1 = nn.parameter.Parameter(
+            torch.tensor(policy_map_array, requires_grad=False, dtype=torch.float32),
+            requires_grad=False,
+        )
+
+    def forward(self, inputs):
+        flow = self.conv_block(inputs)
+        flow = self.conv(flow)
+        h_conv_pol_flat = flow.reshape(-1, 80 * 8 * 8)
+        return h_conv_pol_flat @ self.fc1.type(h_conv_pol_flat.dtype)
 
 
 class ConvolutionalValueOrMovesLeftHead(nn.Module):
     def __init__(self, input_dim, output_dim, num_filters, hidden_dim, relu):
         super().__init__()
-        self.conv = nn.Conv2d(input_dim, num_filters, kernel_size=1, bias=False)
-        self.bn = nn.BatchNorm2d(num_filters)
-        self.fc1 = nn.Linear(num_filters * 8 * 8, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
-        self.use_relu = relu
+        self.num_filters = num_filters
+        self.conv_block = ConvBlock(
+            input_channels=input_dim, filter_size=1, output_channels=num_filters
+        )
+        # No l2_reg on the final layers
+        self.fc2 = nn.Linear(self.num_filters * 8 * 8, hidden_dim, bias=True)
+        self.fc_out = nn.Linear(hidden_dim, output_dim, bias=True)
+        self.relu = relu
+        nn.init.xavier_normal_(self.fc_out.weight)
 
-    def forward(self, x):
-        x = F.relu(self.bn(self.conv(x)))
-        x = x.reshape(x.shape[0], -1)  # Flatten
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        if self.use_relu:
-            x = F.relu(x)
-        return x
+    def forward(self, inputs):
+        flow = self.conv_block(inputs)
+        flow = flow.reshape(-1, self.num_filters * 8 * 8)
+        flow = self.fc2(flow)
+        flow = F.relu(flow)
+        flow = self.fc_out(flow)
+        if self.relu:
+            flow = F.relu(flow)
+        return flow
 
 
 class LeelaZeroNet(nn.Module):
     """
-    Leela Chess Zero network architecture (inference only).
+    Leela Chess Zero network architecture (inference only, matches training exactly).
 
     Input: (batch, 112, 8, 8) - 112 channels of board state
     Output:
