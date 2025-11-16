@@ -46,7 +46,7 @@ data_volume = modal.Volume.from_name("chess-training-data", create_if_missing=Tr
     ],
 )
 def train_lc0_model(
-    num_epochs: int = 10,
+    num_epochs: int = 6,  # Reduced from 10 to prevent overfitting (with early stopping)
     batch_size: int = 256,
     learning_rate: float = 0.001,
     num_filters: int = 128,
@@ -57,6 +57,7 @@ def train_lc0_model(
     moves_left_loss_weight: float = 0.5,
     q_ratio: float = 0.0,
     hf_repo: str = "steveandcow/chesshacks-lc0",
+    dropout: float = 0.1,  # Add dropout parameter for regularization
 ):
     """
     Train LC0 model on Modal GPU.
@@ -97,7 +98,11 @@ def train_lc0_model(
         print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
 
-    # Create model
+        # Enable TF32 for 2-3x speedup on Ampere/Hopper GPUs (H100, A100)
+        torch.set_float32_matmul_precision('high')
+        print("⚡ Enabled TensorFloat32 for faster training")
+
+    # Create model with dropout regularization
     print("\n📦 Creating LC0 model...")
     model = LeelaZeroNet(
         num_filters=num_filters,
@@ -108,7 +113,8 @@ def train_lc0_model(
         moves_left_loss_weight=moves_left_loss_weight,
         q_ratio=q_ratio,
         optimizer="adam",
-        learning_rate=learning_rate
+        learning_rate=learning_rate,
+        dropout=dropout  # Pass dropout for regularization
     ).to(device)
 
     # Compile model for 20-30% speedup (PyTorch 2.0+)
@@ -150,11 +156,11 @@ def train_lc0_model(
         traceback.print_exc()
         return {"error": f"Data loading failed: {e}"}
 
-    # Setup optimizer
+    # Setup optimizer with increased weight decay for better regularization
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=learning_rate,
-        weight_decay=0.0001
+        weight_decay=0.0005  # Increased from 0.0001 to reduce overfitting
     )
 
     # Learning rate scheduler
@@ -164,10 +170,12 @@ def train_lc0_model(
         eta_min=learning_rate * 0.01
     )
 
-    # Training loop
+    # Training loop with early stopping
     print(f"\n🎯 Starting training for {num_epochs} epochs...")
     best_val_loss = float('inf')
     model_path = None
+    patience = 3  # Stop if no improvement for 3 epochs
+    patience_counter = 0
 
     for epoch in range(num_epochs):
         print(f"\n{'='*60}")
@@ -215,9 +223,8 @@ def train_lc0_model(
                 train_moves_left_loss += ml_loss.item()
                 num_batches += 1
 
-                # Limit to 1000 batches per epoch for faster iteration during hackathon
-                if num_batches >= 1000:
-                    break
+                # REMOVED: Artificial 1000-batch limit that caused severe overfitting
+                # Now training on full dataset each epoch for better generalization
 
         except Exception as e:
             print(f"❌ Training failed: {e}")
@@ -282,9 +289,10 @@ def train_lc0_model(
         scheduler.step()
         print(f"Learning rate: {optimizer.param_groups[0]['lr']:.6f}")
 
-        # Save best model
+        # Save best model and handle early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            patience_counter = 0  # Reset patience counter on improvement
             print(f"✅ New best model! (val_loss: {val_loss:.4f})")
 
             checkpoint = {
@@ -303,6 +311,13 @@ def train_lc0_model(
 
             model_path = "/tmp/best_lc0_model.pt"
             torch.save(checkpoint, model_path)
+        else:
+            patience_counter += 1
+            print(f"⚠️  No improvement. Patience: {patience_counter}/{patience}")
+
+            if patience_counter >= patience:
+                print(f"🛑 Early stopping triggered after {epoch + 1} epochs")
+                break
 
     # Training complete
     print("\n" + "="*60)
@@ -319,37 +334,124 @@ def train_lc0_model(
         return {"error": "No HuggingFace token"}
 
     try:
-        model_name = f"lc0_{num_filters}x{num_residual_blocks}"
+        import json
+        from datetime import datetime
 
+        # Create versioned model name with timestamp
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        model_name = f"lc0_{num_filters}x{num_residual_blocks}_ep{epoch+1}_loss{best_val_loss:.4f}_{timestamp}"
+
+        # Create config with ALL hyperparameters
+        config = {
+            "model_architecture": {
+                "num_filters": num_filters,
+                "num_residual_blocks": num_residual_blocks,
+                "se_ratio": se_ratio,
+                "dropout": dropout,
+            },
+            "training_hyperparameters": {
+                "batch_size": batch_size,
+                "learning_rate": learning_rate,
+                "weight_decay": 0.0005,
+                "num_epochs": num_epochs,
+                "epochs_trained": epoch + 1,
+                "optimizer": "adam",
+                "scheduler": "cosine",
+            },
+            "loss_weights": {
+                "policy_loss_weight": policy_loss_weight,
+                "value_loss_weight": value_loss_weight,
+                "moves_left_loss_weight": moves_left_loss_weight,
+                "q_ratio": q_ratio,
+            },
+            "training_results": {
+                "best_val_loss": float(best_val_loss),
+                "best_epoch": epoch + 1,
+                "early_stopped": epoch + 1 < num_epochs,
+            },
+            "data": {
+                "train_split": 0.95,
+                "shuffle_buffer_size": 100000,
+                "streaming": True,
+            },
+            "timestamp": timestamp,
+            "model_type": "lc0_minimal",
+        }
+
+        # Save config to file
+        config_path = "/tmp/model_config.json"
+        with open(config_path, 'w') as f:
+            json.dump(config, f, indent=2)
+
+        # Upload both model and config
         api = HfApi()
+
+        # Create commit message with key metrics
+        commit_message = (
+            f"Add {model_name}\n\n"
+            f"Architecture: {num_filters}x{num_residual_blocks} (SE={se_ratio}, dropout={dropout})\n"
+            f"Training: {epoch+1} epochs, batch_size={batch_size}, lr={learning_rate}\n"
+            f"Best val_loss: {best_val_loss:.4f}\n"
+            f"Loss weights: policy={policy_loss_weight}, value={value_loss_weight}, ml={moves_left_loss_weight}"
+        )
+
+        print(f"📤 Uploading model: {model_name}")
+        print(f"📝 Config: {json.dumps(config, indent=2)}")
+
+        # Upload model weights
         api.upload_file(
             path_or_fileobj=model_path,
-            path_in_repo=f"{model_name}.pt",
+            path_in_repo=f"checkpoints/{model_name}.pt",
             repo_id=hf_repo,
             token=hf_token,
+            commit_message=commit_message,
+        )
+
+        # Upload config
+        api.upload_file(
+            path_or_fileobj=config_path,
+            path_in_repo=f"checkpoints/{model_name}.json",
+            repo_id=hf_repo,
+            token=hf_token,
+            commit_message=f"Add config for {model_name}",
+        )
+
+        # Also upload as "latest" for easy inference
+        api.upload_file(
+            path_or_fileobj=model_path,
+            path_in_repo=f"latest_{num_filters}x{num_residual_blocks}.pt",
+            repo_id=hf_repo,
+            token=hf_token,
+            commit_message=f"Update latest {num_filters}x{num_residual_blocks} model",
         )
 
         print(f"✅ Model uploaded to https://huggingface.co/{hf_repo}")
+        print(f"   Versioned: checkpoints/{model_name}.pt")
+        print(f"   Latest:    latest_{num_filters}x{num_residual_blocks}.pt")
 
         return {
             "best_val_loss": best_val_loss,
-            "epochs_trained": num_epochs,
+            "epochs_trained": epoch + 1,
             "hf_repo": hf_repo,
             "model_name": model_name,
+            "model_path": f"checkpoints/{model_name}.pt",
+            "config_path": f"checkpoints/{model_name}.json",
         }
 
     except Exception as e:
         print(f"⚠️  Upload failed: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "best_val_loss": best_val_loss,
-            "epochs_trained": num_epochs,
+            "epochs_trained": epoch + 1,
             "error": f"Upload failed: {e}"
         }
 
 
 @app.local_entrypoint()
 def main(
-    num_epochs: int = 10,
+    num_epochs: int = 6,  # Reduced from 10 to prevent overfitting (with early stopping)
     batch_size: int = 256,
     num_filters: int = 128,
     num_residual_blocks: int = 6,

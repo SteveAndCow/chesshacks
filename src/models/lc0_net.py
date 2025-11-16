@@ -1,11 +1,22 @@
-﻿import torch
+"""
+Lightweight LC0 network for inference only (matches training architecture exactly).
+
+This is copied from pt_layers.py and lccnn.py but without PyTorch Lightning.
+"""
+import torch
 from torch import nn
 from torch.nn import functional as F
-from . import lc0_policy_map
+from typing import NamedTuple
+from collections import OrderedDict
+
+
+class ModelOutput(NamedTuple):
+    policy: torch.Tensor
+    value: torch.Tensor
+    moves_left: torch.Tensor
 
 
 class SqueezeExcitation(nn.Module):
-    # Tested as equivalent to the TF layer
     def __init__(self, channels, se_ratio):
         super().__init__()
         self.se_ratio = se_ratio
@@ -44,7 +55,7 @@ class ConvBlock(nn.Module):
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, channels, se_ratio, dropout=0.1):
+    def __init__(self, channels, se_ratio):
         super().__init__()
         self.conv1 = nn.Conv2d(
             channels,
@@ -66,12 +77,10 @@ class ResidualBlock(nn.Module):
         nn.init.xavier_normal_(self.conv1.weight)
         nn.init.xavier_normal_(self.conv2.weight)
         self.squeeze_excite = SqueezeExcitation(channels, se_ratio)
-        self.dropout = nn.Dropout2d(p=dropout)  # Add dropout for regularization
 
     def forward(self, inputs):
         out1 = self.conv1(inputs)
         out1 = F.relu(self.batch_norm(out1.float()))
-        out1 = self.dropout(out1)  # Apply dropout after activation
         out2 = self.conv2(out1)
         out2 = self.squeeze_excite(out2)
         return F.relu(inputs + out2)
@@ -83,13 +92,15 @@ class ConvolutionalPolicyHead(nn.Module):
         self.conv_block = ConvBlock(
             filter_size=3, input_channels=num_filters, output_channels=num_filters
         )
-        # No l2_reg on the final convolution, because it's not going to be followed by a batchnorm
+        # No l2_reg on the final convolution
         self.conv = nn.Conv2d(num_filters, 80, 3, bias=True, padding="same")
         nn.init.xavier_normal_(self.conv.weight)
+
+        # Import policy map - make it a non-trainable parameter
+        from .lc0_policy_map import make_map
+        policy_map_array = make_map()
         self.fc1 = nn.parameter.Parameter(
-            torch.tensor(
-                lc0_policy_map.make_map(), requires_grad=False, dtype=torch.float32
-            ),
+            torch.tensor(policy_map_array, requires_grad=False, dtype=torch.float32),
             requires_grad=False,
         )
 
@@ -100,22 +111,6 @@ class ConvolutionalPolicyHead(nn.Module):
         return h_conv_pol_flat @ self.fc1.type(h_conv_pol_flat.dtype)
 
 
-class DensePolicyHead(nn.Module):
-    def __init__(self, input_dim, hidden_dim=128):
-        super().__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        # No l2_reg on the final layer, because it's not going to be followed by a batchnorm
-        self.fc_final = nn.Linear(hidden_dim, 1858)
-        nn.init.xavier_normal_(self.fc1.weight)
-        nn.init.xavier_normal_(self.fc_final.weight)
-
-    def forward(self, inputs):
-        # Flatten input before proceeding
-        inputs = inputs.reshape(inputs.shape[0], -1)
-        out = F.relu(self.fc1(inputs))
-        return self.fc_final(out)
-
-
 class ConvolutionalValueOrMovesLeftHead(nn.Module):
     def __init__(self, input_dim, output_dim, num_filters, hidden_dim, relu):
         super().__init__()
@@ -123,7 +118,7 @@ class ConvolutionalValueOrMovesLeftHead(nn.Module):
         self.conv_block = ConvBlock(
             input_channels=input_dim, filter_size=1, output_channels=num_filters
         )
-        # No l2_reg on the final layers, because they're not going to be followed by a batchnorm
+        # No l2_reg on the final layers
         self.fc2 = nn.Linear(self.num_filters * 8 * 8, hidden_dim, bias=True)
         self.fc_out = nn.Linear(hidden_dim, output_dim, bias=True)
         self.relu = relu
@@ -140,21 +135,58 @@ class ConvolutionalValueOrMovesLeftHead(nn.Module):
         return flow
 
 
-class DenseValueOrMovesLeftHead(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dim, relu):
-        super().__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc_out = nn.Linear(hidden_dim, output_dim)
-        self.relu = relu
-        nn.init.xavier_normal_(self.fc1.weight)
-        nn.init.xavier_normal_(self.fc_out.weight)
+class LeelaZeroNet(nn.Module):
+    """
+    Leela Chess Zero network architecture (inference only, matches training exactly).
 
-    def forward(self, inputs):
-        if inputs.dim() > 2:
-            # Flatten input before proceeding
-            inputs = inputs.reshape(inputs.shape[0], -1)
-        flow = F.relu(self.fc1(inputs))
-        flow = self.fc_out(flow)
-        if self.relu:
-            flow = F.relu(flow)
-        return flow
+    Input: (batch, 112, 8, 8) - 112 channels of board state
+    Output:
+        - policy: (batch, 1858) - move probabilities
+        - value: (batch, 3) - win/draw/loss probabilities
+        - moves_left: (batch, 1) - estimated moves until game end
+    """
+
+    def __init__(
+        self,
+        num_filters,
+        num_residual_blocks,
+        se_ratio,
+        **kwargs  # Ignore training-specific kwargs
+    ):
+        super().__init__()
+        self.input_block = ConvBlock(
+            input_channels=112, filter_size=3, output_channels=num_filters
+        )
+        residual_blocks = OrderedDict(
+            [
+                (f"residual_block_{i}", ResidualBlock(num_filters, se_ratio))
+                for i in range(num_residual_blocks)
+            ]
+        )
+        self.residual_blocks = nn.Sequential(residual_blocks)
+        self.policy_head = ConvolutionalPolicyHead(num_filters=num_filters)
+        # Value head: 3 dimensions for WDL (win/draw/loss)
+        self.value_head = ConvolutionalValueOrMovesLeftHead(
+            input_dim=num_filters,
+            output_dim=3,
+            num_filters=32,
+            hidden_dim=128,
+            relu=False,
+        )
+        # Moves left head
+        self.moves_left_head = ConvolutionalValueOrMovesLeftHead(
+            input_dim=num_filters,
+            output_dim=1,
+            num_filters=8,
+            hidden_dim=128,
+            relu=True,
+        )
+
+    def forward(self, input_planes: torch.Tensor) -> ModelOutput:
+        flow = input_planes.reshape(-1, 112, 8, 8)
+        flow = self.input_block(flow)
+        flow = self.residual_blocks(flow)
+        policy_out = self.policy_head(flow)
+        value_out = self.value_head(flow)
+        moves_left_out = self.moves_left_head(flow)
+        return ModelOutput(policy_out, value_out, moves_left_out)

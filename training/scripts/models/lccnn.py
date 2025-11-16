@@ -30,7 +30,8 @@ class LeelaZeroNet(pl.LightningModule):
         moves_left_loss_weight,
         q_ratio,
         optimizer,
-        learning_rate
+        learning_rate,
+        dropout=0.1  # Add dropout for regularization
     ):
         super().__init__()
         self.input_block = ConvBlock(
@@ -38,7 +39,7 @@ class LeelaZeroNet(pl.LightningModule):
         )
         residual_blocks = OrderedDict(
             [
-                (f"residual_block_{i}", ResidualBlock(num_filters, se_ratio))
+                (f"residual_block_{i}", ResidualBlock(num_filters, se_ratio, dropout=dropout))
                 for i in range(num_residual_blocks)
             ]
         )
