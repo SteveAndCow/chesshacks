@@ -38,7 +38,7 @@ data_volume = modal.Volume.from_name("chess-training-data", create_if_missing=Tr
 
 @app.function(
     image=image,
-    gpu="T4",  # or "A10G" for faster, "H100" for fastest
+    gpu="H100",  # H100 = 8-10x faster than T4, FASTEST for hackathon deadline
     timeout=3600 * 6,  # 6 hours max
     volumes={"/data": data_volume},
     secrets=[
@@ -56,6 +56,7 @@ def train_lc0_model(
     value_loss_weight: float = 1.6,
     moves_left_loss_weight: float = 0.5,
     q_ratio: float = 0.0,
+    hf_repo: str = "steveandcow/chesshacks-lc0",
 ):
     """
     Train LC0 model on Modal GPU.
@@ -110,6 +111,10 @@ def train_lc0_model(
         learning_rate=learning_rate
     ).to(device)
 
+    # Compile model for 20-30% speedup (PyTorch 2.0+)
+    print("🔥 Compiling model with torch.compile()...")
+    model = torch.compile(model, mode="reduce-overhead")
+
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -134,7 +139,7 @@ def train_lc0_model(
         train_loader, val_loader = create_train_val_loaders(
             data_dir=data_dir,
             batch_size=batch_size,
-            train_split=0.9,
+            train_split=0.95,  # Use more data for training (95% vs 90%)
             shuffle_buffer_size=100000,
             num_workers=0,  # Modal handles parallelism
             streaming=True
@@ -314,23 +319,22 @@ def train_lc0_model(
         return {"error": "No HuggingFace token"}
 
     try:
-        repo_id = "your-username/chesshacks-lc0"  # TODO: Make configurable
         model_name = f"lc0_{num_filters}x{num_residual_blocks}"
 
         api = HfApi()
         api.upload_file(
             path_or_fileobj=model_path,
             path_in_repo=f"{model_name}.pt",
-            repo_id=repo_id,
+            repo_id=hf_repo,
             token=hf_token,
         )
 
-        print(f"✅ Model uploaded to https://huggingface.co/{repo_id}")
+        print(f"✅ Model uploaded to https://huggingface.co/{hf_repo}")
 
         return {
             "best_val_loss": best_val_loss,
             "epochs_trained": num_epochs,
-            "hf_repo": repo_id,
+            "hf_repo": hf_repo,
             "model_name": model_name,
         }
 
@@ -349,6 +353,7 @@ def main(
     batch_size: int = 256,
     num_filters: int = 128,
     num_residual_blocks: int = 6,
+    hf_repo: str = "steveandcow/chesshacks-lc0",
 ):
     """
     Launch LC0 training on Modal.
@@ -358,18 +363,21 @@ def main(
         batch_size: Batch size
         num_filters: Number of filters (128 recommended)
         num_residual_blocks: Number of blocks (6-10 recommended)
+        hf_repo: HuggingFace repo ID (e.g., "username/chesshacks-lc0")
     """
     print(f"🚀 Launching LC0 training on Modal...")
     print(f"Config:")
     print(f"  - Epochs: {num_epochs}")
     print(f"  - Batch size: {batch_size}")
     print(f"  - Architecture: {num_filters}x{num_residual_blocks}")
+    print(f"  - HuggingFace repo: {hf_repo}")
 
     result = train_lc0_model.remote(
         num_epochs=num_epochs,
         batch_size=batch_size,
         num_filters=num_filters,
-        num_residual_blocks=num_residual_blocks
+        num_residual_blocks=num_residual_blocks,
+        hf_repo=hf_repo
     )
 
     print("\n" + "="*60)

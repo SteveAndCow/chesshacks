@@ -1,10 +1,10 @@
-﻿from pt_layers import (
+﻿from .pt_layers import (
     ConvBlock,
     ResidualBlock,
     ConvolutionalPolicyHead,
     ConvolutionalValueOrMovesLeftHead,
 )
-from pt_losses import policy_loss, value_loss, moves_left_loss
+from .pt_losses import policy_loss, value_loss, moves_left_loss
 import torch
 from torch import nn
 from collections import OrderedDict

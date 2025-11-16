@@ -1,7 +1,7 @@
 ﻿import torch
 from torch import nn
 from torch.nn import functional as F
-import lc0_policy_map
+from . import lc0_policy_map
 
 
 class SqueezeExcitation(nn.Module):
@@ -86,7 +86,7 @@ class ConvolutionalPolicyHead(nn.Module):
         nn.init.xavier_normal_(self.conv.weight)
         self.fc1 = nn.parameter.Parameter(
             torch.tensor(
-                lc0_az_policy_map.make_map(), requires_grad=False, dtype=torch.float32
+                lc0_policy_map.make_map(), requires_grad=False, dtype=torch.float32
             ),
             requires_grad=False,
         )

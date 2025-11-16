@@ -264,7 +264,7 @@ def train_model(config_dict: dict):
     print("="*60)
 
     hf_config = config_dict.get("huggingface", {})
-    repo_id = hf_config.get("repo_id", "your-username/chesshacks-bot")
+    repo_id = hf_config.get("repo_id", "steveandcow/chesshacks-bot")
     model_name = hf_config.get("model_name", "model")
 
     # Verify model was saved
