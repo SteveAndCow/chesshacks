@@ -406,11 +406,20 @@ class MonteCarlo:
 
 # Load the trained neural network model
 print("🤖 Loading chess model from HuggingFace...")
-from .models.inference import ChessModelLoader
+from .models.lc0_inference import LC0ModelLoader
+import os
 
-model_loader = ChessModelLoader(
-    repo_id="steveandcow/chesshacks-bot",
-    model_name="cnn_baseline",
+# Environment variable to select which model to use (configurable per deployment slot)
+# Examples:
+#   - latest_v2_128x6.pt (small/fast model for Slot 1)
+#   - latest_v2_256x10.pt (large/strong model for Slot 2)
+#   - latest_transformer_v2_256x6h8.pt (transformer model for Slot 3)
+MODEL_FILE = os.getenv("CHESS_MODEL_FILE", "latest_v2_128x6.pt")
+print(f"📦 Selected model: {MODEL_FILE}")
+
+model_loader = LC0ModelLoader(
+    repo_id="steveandcow/chesshacks-lc0",  # HuggingFace repo with trained models
+    model_file=MODEL_FILE,  # Configurable via environment variable
     device="cpu"  # Use CPU for deployment (or "cuda" if GPU available)
 )
 

@@ -64,9 +64,27 @@ def train_transformer_model(
     moves_left_loss_weight: float = 0.5,
     hf_repo: str = "steveandcow/chesshacks-lc0",
     dropout: float = 0.15,
+    max_positions: int = None,  # Limit dataset size (None = use all data)
 ):
     """
     Train LeelaZeroTransformer on Modal GPU.
+
+    Args:
+        num_epochs: Number of training epochs
+        batch_size: Batch size
+        learning_rate: Learning rate
+        num_filters: Number of filters/embedding dimension
+        num_blocks: Number of transformer blocks (depth)
+        heads: Number of attention heads
+        policy_loss_weight: Weight for policy loss
+        value_loss_weight: Weight for value loss
+        moves_left_loss_weight: Weight for moves-left loss
+        hf_repo: HuggingFace repo ID
+        dropout: Dropout rate
+        max_positions: Max training positions to use (None = all). Recommended:
+                      - 500K-1M: Fast baseline (~30-45 min)
+                      - 2M-3M: Medium quality (~1.5-2 hrs)
+                      - 5M-7.5M: High quality (~4-5 hrs)
     """
     import torch
     import sys
@@ -137,14 +155,24 @@ def train_transformer_model(
         print(f"  - {item.name}")
 
     try:
-        train_loader, val_loader = create_train_val_loaders(
-            data_dir=data_dir,
-            batch_size=batch_size,
-            train_split=0.95,
-            shuffle_buffer_size=100000,
-            num_workers=0,
-            streaming=True
-        )
+        # Configure data loader with optional dataset size limit
+        loader_kwargs = {
+            "data_dir": data_dir,
+            "batch_size": batch_size,
+            "train_split": 0.95,
+            "shuffle_buffer_size": 100000,
+            "num_workers": 0,
+            "streaming": True
+        }
+
+        # Add max_positions if specified
+        if max_positions is not None:
+            loader_kwargs["max_positions"] = max_positions
+            print(f"📊 Limiting dataset to {max_positions:,} positions")
+        else:
+            print(f"📊 Using all available positions in dataset")
+
+        train_loader, val_loader = create_train_val_loaders(**loader_kwargs)
     except Exception as e:
         print(f"❌ Failed to create data loaders: {e}")
         import traceback
@@ -477,9 +505,22 @@ def main(
     num_blocks: int = 6,
     heads: int = 8,
     hf_repo: str = "steveandcow/chesshacks-lc0",
+    max_positions: int = None,  # Limit dataset size (None = all)
 ):
     """
     Launch LeelaZeroTransformer training on Modal.
+
+    Args:
+        num_epochs: Number of epochs
+        batch_size: Batch size
+        num_filters: Embedding dimension (256 recommended)
+        num_blocks: Number of transformer blocks (6-12 recommended)
+        heads: Number of attention heads (8 recommended)
+        hf_repo: HuggingFace repo ID
+        max_positions: Max positions to train on. Examples:
+                      - 1000000 (1M): Fast baseline
+                      - 3000000 (3M): Medium quality
+                      - 7500000 (7.5M): Full dataset
     """
     print(f"🚀 Launching Transformer V2 (FIXED) training on Modal...")
     print(f"Config:")
@@ -489,6 +530,10 @@ def main(
     print(f"  - HuggingFace repo: {hf_repo}")
     print(f"  - Dropout: 0.15 (increased)")
     print(f"  - Patience: 6 (increased)")
+    if max_positions:
+        print(f"  - Dataset size: {max_positions:,} positions (LIMITED)")
+    else:
+        print(f"  - Dataset size: ALL available positions")
 
     result = train_transformer_model.remote(
         num_epochs=num_epochs,
@@ -496,7 +541,8 @@ def main(
         num_filters=num_filters,
         num_blocks=num_blocks,
         heads=heads,
-        hf_repo=hf_repo
+        hf_repo=hf_repo,
+        max_positions=max_positions
     )
 
     print("\n" + "="*60)
