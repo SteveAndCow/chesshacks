@@ -44,7 +44,7 @@ class ConvBlock(nn.Module):
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, channels, se_ratio):
+    def __init__(self, channels, se_ratio, dropout=0.1):
         super().__init__()
         self.conv1 = nn.Conv2d(
             channels,
@@ -66,10 +66,12 @@ class ResidualBlock(nn.Module):
         nn.init.xavier_normal_(self.conv1.weight)
         nn.init.xavier_normal_(self.conv2.weight)
         self.squeeze_excite = SqueezeExcitation(channels, se_ratio)
+        self.dropout = nn.Dropout2d(p=dropout)  # Add dropout for regularization
 
     def forward(self, inputs):
         out1 = self.conv1(inputs)
         out1 = F.relu(self.batch_norm(out1.float()))
+        out1 = self.dropout(out1)  # Apply dropout after activation
         out2 = self.conv2(out1)
         out2 = self.squeeze_excite(out2)
         return F.relu(inputs + out2)
