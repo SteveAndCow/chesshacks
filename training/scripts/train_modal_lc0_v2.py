@@ -68,6 +68,7 @@ def train_lc0_model(
     q_ratio: float = 0.0,
     hf_repo: str = "steveandcow/chesshacks-lc0",
     dropout: float = 0.15,  # FIX #4: Increased from 0.1 to 0.15 for better regularization
+    max_positions: int = None,  # Limit dataset size (None = use all data)
 ):
     """
     Train LC0 model on Modal GPU with CRITICAL FIXES applied.
@@ -84,6 +85,10 @@ def train_lc0_model(
         moves_left_loss_weight: Weight for moves-left loss
         q_ratio: Ratio for Q vs WDL in value target
         dropout: Dropout rate (increased to 0.15 for better regularization)
+        max_positions: Max training positions to use (None = all). Recommended:
+                      - 500K-1M: Fast baseline (~30-45 min)
+                      - 2M-3M: Medium quality (~1.5-2 hrs)
+                      - 5M-7.5M: High quality (~4-5 hrs)
     """
     import torch
     import sys
@@ -159,14 +164,24 @@ def train_lc0_model(
         print(f"  - {item.name}")
 
     try:
-        train_loader, val_loader = create_train_val_loaders(
-            data_dir=data_dir,
-            batch_size=batch_size,
-            train_split=0.95,  # Use more data for training (95% vs 90%)
-            shuffle_buffer_size=100000,
-            num_workers=0,  # Modal handles parallelism
-            streaming=True
-        )
+        # Configure data loader with optional dataset size limit
+        loader_kwargs = {
+            "data_dir": data_dir,
+            "batch_size": batch_size,
+            "train_split": 0.95,  # Use more data for training (95% vs 90%)
+            "shuffle_buffer_size": 100000,
+            "num_workers": 0,  # Modal handles parallelism
+            "streaming": True
+        }
+
+        # Add max_positions if specified
+        if max_positions is not None:
+            loader_kwargs["max_positions"] = max_positions
+            print(f"📊 Limiting dataset to {max_positions:,} positions")
+        else:
+            print(f"📊 Using all available positions in dataset")
+
+        train_loader, val_loader = create_train_val_loaders(**loader_kwargs)
     except Exception as e:
         print(f"❌ Failed to create data loaders: {e}")
         import traceback
@@ -514,6 +529,7 @@ def main(
     num_filters: int = 128,
     num_residual_blocks: int = 6,
     hf_repo: str = "steveandcow/chesshacks-lc0",
+    max_positions: int = None,  # Limit dataset size (None = all)
 ):
     """
     Launch LC0 training on Modal with CRITICAL FIXES.
@@ -524,6 +540,10 @@ def main(
         num_filters: Number of filters (128 recommended)
         num_residual_blocks: Number of blocks (6-10 recommended)
         hf_repo: HuggingFace repo ID (e.g., "username/chesshacks-lc0")
+        max_positions: Max positions to train on. Examples:
+                      - 1000000 (1M): Fast baseline
+                      - 2000000 (2M): Medium quality
+                      - 7500000 (7.5M): Full dataset
     """
     print(f"🚀 Launching LC0 V2 (FIXED) training on Modal...")
     print(f"Config:")
@@ -534,13 +554,18 @@ def main(
     print(f"  - Dropout: 0.15 (increased)")
     print(f"  - Patience: 6 (increased)")
     print(f"  - LR schedule: warmup + slower cosine")
+    if max_positions:
+        print(f"  - Dataset size: {max_positions:,} positions (LIMITED)")
+    else:
+        print(f"  - Dataset size: ALL available positions")
 
     result = train_lc0_model.remote(
         num_epochs=num_epochs,
         batch_size=batch_size,
         num_filters=num_filters,
         num_residual_blocks=num_residual_blocks,
-        hf_repo=hf_repo
+        hf_repo=hf_repo,
+        max_positions=max_positions
     )
 
     print("\n" + "="*60)
