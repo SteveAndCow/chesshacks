@@ -5,6 +5,7 @@ import numpy as np
 
 from .utils import chess_manager, GameContext
 from chess import Move
+import chess
 import random
 
 import random
@@ -414,7 +415,7 @@ import os
 #   - latest_v2_128x6.pt (small/fast model for Slot 1)
 #   - latest_v2_256x10.pt (large/strong model for Slot 2)
 #   - latest_transformer_v2_256x6h8.pt (transformer model for Slot 3)
-MODEL_FILE = os.getenv("CHESS_MODEL_FILE", "latest_v2_128x6.pt")
+MODEL_FILE = os.getenv("CHESS_MODEL_FILE", "lc0_128x6.pt")
 print(f"📦 Selected model: {MODEL_FILE}")
 
 model_loader = LC0ModelLoader(
@@ -682,15 +683,74 @@ def test_func(ctx: GameContext):
         def batch_evaluator(boards):
             """Evaluate multiple boards at once using batched NN inference."""
             try:
-                _, values = model_loader.batch_predict(boards)
+                # Validate inputs
+                if not boards:
+                    print("⚠️ Empty board list received")
+                    return []
+
+                if not all(hasattr(b, 'turn') for b in boards):
+                    print(f"⚠️ Invalid boards in batch: {boards}")
+                    raise ValueError("Invalid board objects in batch")
+
+                # Filter out terminal positions (shouldn't happen but be defensive)
+                non_terminal_boards = []
+                terminal_values = []
+                board_indices = []
+
+                for i, board in enumerate(boards):
+                    if board.is_game_over():
+                        # Terminal position - assign value based on outcome
+                        result = board.result()
+                        if result == "1-0":
+                            terminal_values.append(1.0 if board.turn == chess.WHITE else -1.0)
+                        elif result == "0-1":
+                            terminal_values.append(-1.0 if board.turn == chess.WHITE else 1.0)
+                        else:
+                            terminal_values.append(0.0)  # Draw
+                        board_indices.append(-1)  # Mark as terminal
+                    else:
+                        board_indices.append(len(non_terminal_boards))
+                        non_terminal_boards.append(board)
+
+                # Evaluate non-terminal positions
+                if non_terminal_boards:
+                    print(f"🔍 Batch evaluating {len(non_terminal_boards)} positions ({len(boards) - len(non_terminal_boards)} terminal)")
+                    _, nn_values = model_loader.batch_predict(non_terminal_boards)
+                    print(f"✓ Batch evaluation complete: {len(nn_values)} values returned")
+                else:
+                    print(f"⚠️ All {len(boards)} positions are terminal, no NN evaluation needed")
+                    nn_values = []
+
+                # Reconstruct full values list
+                values = []
+                terminal_idx = 0
+                nn_idx = 0
+                for idx in board_indices:
+                    if idx == -1:
+                        values.append(terminal_values[terminal_idx])
+                        terminal_idx += 1
+                    else:
+                        values.append(nn_values[nn_idx])
+                        nn_idx += 1
+
                 return values
             except Exception as e:
-                print(f"⚠️ Batch predict failed: {e}, falling back to sequential")
+                print(f"⚠️ Batch predict failed: {e}")
+                traceback.print_exc()  # Print full stack trace
+                print(f"⚠️ Falling back to sequential evaluation")
                 try:
                     # Fallback to sequential evaluation
-                    return [model_loader.evaluate_position(b) for b in boards]
+                    values = []
+                    for i, b in enumerate(boards):
+                        print(f"  Evaluating board {i+1}/{len(boards)}")
+                        val = model_loader.evaluate_position(b)
+                        values.append(val)
+                    print(f"✓ Sequential evaluation complete: {len(values)} values")
+                    return values
                 except Exception as e2:
-                    print(f"⚠️ Sequential fallback also failed: {e2}, using neutral heuristic")
+                    print(f"⚠️ Sequential fallback also failed: {e2}")
+                    traceback.print_exc()
+                    print(f"⚠️ Using neutral heuristic for all positions")
                     # Ultimate fallback: return 0.0 (neutral evaluation) for all positions
                     return [0.0] * len(boards)
 
@@ -698,12 +758,35 @@ def test_func(ctx: GameContext):
 
         # Use batched simulation for much faster search
         # Batch size of 8 is a good balance between GPU utilization and latency
-        montecarlo.simulate_batched(num_simulations, batch_size=8)
+        try:
+            print(f"🚀 Starting batched MCTS with {num_simulations} simulations")
+            montecarlo.simulate_batched(num_simulations, batch_size=8)
+            print(f"✓ MCTS simulation complete")
+        except Exception as e:
+            print(f"⚠️ Batched MCTS failed: {e}")
+            traceback.print_exc()
+            print(f"⚠️ Falling back to sequential MCTS")
+            # Clear any corrupted state
+            montecarlo.batch_evaluator = None
+            montecarlo.simulate(num_simulations)
     else:
         # Fallback to sequential if no model
+        print(f"🚀 Starting sequential MCTS with {num_simulations} simulations")
         montecarlo.simulate(num_simulations)
+        print(f"✓ MCTS simulation complete")
 
-    best_child = montecarlo.make_choice()
+    try:
+        best_child = montecarlo.make_choice()
+    except Exception as e:
+        print(f"⚠️ Failed to select best move from MCTS: {e}")
+        traceback.print_exc()
+        # Fallback to NN policy if available
+        if MODEL_LOADED and move_probs:
+            print("⚠️ Falling back to NN policy")
+            return max(move_probs.items(), key=lambda x: x[1])[0]
+        # Final fallback: random
+        print("⚠️ Falling back to random move")
+        return random.choice(legal_moves)
 
     # quick lookup: use fen map to get the original Move object without performing deep copies
     best_fen = best_child.state.fen()

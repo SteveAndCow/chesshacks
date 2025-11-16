@@ -46,7 +46,13 @@ async def get_move(request: Request):
         end_time = time.perf_counter()
         time_taken = (end_time - start_time) * 1000
     except Exception as e:
+        import traceback
         time_taken = (time.perf_counter() - start_time) * 1000
+
+        # Log the full exception to help debugging
+        print(f"❌ ERROR: Bot raised an exception: {e}", flush=True)
+        traceback.print_exc()
+
         return JSONResponse(
             content={
                 "move": None,
@@ -55,6 +61,7 @@ async def get_move(request: Request):
                 "error": "Bot raised an exception",
                 "logs": None,
                 "exception": str(e),
+                "traceback": traceback.format_exc(),
             },
             status_code=500,
         )
