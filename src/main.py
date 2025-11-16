@@ -578,7 +578,7 @@ def test_func(ctx: GameContext):
 
     # FAST OPENING MOVES (skip MCTS in opening to save time)
     move_number = ctx.board.fullmove_number
-    if move_number <= 8:  # Opening phase
+    if move_number <= 3:  # Opening phase
         print("⚡ OPENING: Using fast NN policy (no MCTS)")
         if MODEL_LOADED and move_probs:
             best_move = max(move_probs.items(), key=lambda x: x[1])[0]
