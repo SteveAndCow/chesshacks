@@ -361,6 +361,8 @@ def main(
     min_elo: int = 2000,
     positions_per_file: int = 50000,
     max_chunks: int = None,
+    start_chunk: int = None,
+    end_chunk: int = None,
 ):
     """
     Preprocess PGN files in parallel on Modal.
@@ -369,6 +371,8 @@ def main(
         min_elo: Minimum ELO rating to include
         positions_per_file: Positions per output file
         max_chunks: Maximum number of PGN chunks to process (None = all)
+        start_chunk: Start processing from this chunk number (e.g., 100 for chunk_0100.pgn)
+        end_chunk: Stop processing at this chunk number (exclusive, e.g., 150 for chunk_0149.pgn)
     """
     import time
 
@@ -377,7 +381,11 @@ def main(
     print("="*60)
     print(f"Min ELO: {min_elo}")
     print(f"Positions per output file: {positions_per_file:,}")
-    print(f"Max chunks to process: {max_chunks if max_chunks else 'ALL'}")
+
+    if start_chunk is not None or end_chunk is not None:
+        print(f"Chunk range: {start_chunk or 0} to {end_chunk or 'end'}")
+    else:
+        print(f"Max chunks to process: {max_chunks if max_chunks else 'ALL'}")
 
     # List PGN files in volume
     print("\nListing PGN files in volume...")
@@ -391,10 +399,27 @@ def main(
 
     print(f"✅ Found {len(pgn_files)} total PGN files")
 
-    # Limit to max_chunks if specified
-    if max_chunks and max_chunks < len(pgn_files):
+    # Sort files to ensure consistent ordering
+    pgn_files = sorted(pgn_files)
+
+    # Filter by chunk range if specified
+    if start_chunk is not None or end_chunk is not None:
+        filtered_files = []
+        for f in pgn_files:
+            # Extract chunk number from filename (e.g., filtered_games_chunk0100.pgn -> 100)
+            import re
+            match = re.search(r'chunk(\d+)', f)
+            if match:
+                chunk_num = int(match.group(1))
+                if (start_chunk is None or chunk_num >= start_chunk) and \
+                   (end_chunk is None or chunk_num < end_chunk):
+                    filtered_files.append(f)
+        pgn_files = filtered_files
+        print(f"📋 Processing chunks {start_chunk or 0} to {end_chunk or 'end'}: {len(pgn_files)} files")
+    # Otherwise use max_chunks if specified
+    elif max_chunks and max_chunks < len(pgn_files):
         print(f"⚡ Processing first {max_chunks} chunks (out of {len(pgn_files)})")
-        pgn_files = sorted(pgn_files)[:max_chunks]
+        pgn_files = pgn_files[:max_chunks]
     else:
         print(f"📋 Processing all {len(pgn_files)} chunks")
 
