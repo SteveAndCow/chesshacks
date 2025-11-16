@@ -98,6 +98,10 @@ def train_lc0_model(
         print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
 
+        # Enable TF32 for 2-3x speedup on Ampere/Hopper GPUs (H100, A100)
+        torch.set_float32_matmul_precision('high')
+        print("⚡ Enabled TensorFloat32 for faster training")
+
     # Create model with dropout regularization
     print("\n📦 Creating LC0 model...")
     model = LeelaZeroNet(
