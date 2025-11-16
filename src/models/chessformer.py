@@ -2,6 +2,15 @@
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Import LC0 components
+from .lc0_net import (
+    ConvBlock,
+    ConvolutionalPolicyHead,
+    ConvolutionalValueOrMovesLeftHead,
+    ModelOutput,
+)
+
+
 class RelativePosition2D(nn.Module):
     """
     Shaw et al. style learned relative positional embeddings for 8x8 = 64 tokens.
@@ -42,7 +51,7 @@ class RelativePosition2D(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, dim, heads=8, mlp_ratio=4.0):
+    def __init__(self, dim, heads=8, mlp_ratio=4.0, dropout=0.1):
         super().__init__()
         self.dim = dim
         self.heads = heads
@@ -51,13 +60,16 @@ class TransformerBlock(nn.Module):
 
         self.qkv = nn.Linear(dim, dim * 3, bias=False)
         self.proj = nn.Linear(dim, dim)
+        self.dropout = nn.Dropout(dropout)
 
         self.relpos = RelativePosition2D(self.head_dim)
 
         self.mlp = nn.Sequential(
             nn.Linear(dim, int(dim * mlp_ratio)),
             nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(int(dim * mlp_ratio), dim),
+            nn.Dropout(dropout),
         )
 
         self.norm1 = nn.LayerNorm(dim)
@@ -77,34 +89,42 @@ class TransformerBlock(nn.Module):
         q, k, v = qkv[:,:,0], qkv[:,:,1], qkv[:,:,2]   # each [B,64,H,Dh]
 
         # --- Relative Pos Emb ---
-        a_q, a_k, a_v = self.relpos()   # [64,64,Dh]
+        a_q, a_k, a_v = self.relpos()   # [64, 64, Dh]
 
-        # Add a_ij^Q and a_ij^K:
-        q_rel = q.unsqueeze(2) + a_q    # [B,H,64,64,Dh]
-        k_rel = k.unsqueeze(1) + a_k    # [B,H,64,64,Dh]
+        # Reshape q, k, v for attention: [B, H, 64, Dh]
+        q = q.transpose(1, 2)  # [B, H, 64, Dh]
+        k = k.transpose(1, 2)  # [B, H, 64, Dh]
+        v = v.transpose(1, 2)  # [B, H, 64, Dh]
 
-        # Compute logits:
-        logits = (q_rel * k_rel).sum(-1) / (self.head_dim ** 0.5)
+        # Add relative position embeddings (broadcast properly)
+        # a_q, a_k, a_v shape: [64, 64, Dh]
+        # q shape: [B, H, 64, Dh] -> unsqueeze to [B, H, 64, 1, Dh]
+        q_rel = q.unsqueeze(3) + a_q.unsqueeze(0).unsqueeze(0)  # [B, H, 64, 64, Dh]
+        k_rel = k.unsqueeze(2) + a_k.unsqueeze(0).unsqueeze(0)  # [B, H, 64, 64, Dh]
+
+        # Compute logits: dot product along last dimension
+        logits = (q_rel * k_rel).sum(-1) / (self.head_dim ** 0.5)  # [B, H, 64, 64]
         attn = logits.softmax(dim=-1)
+        attn = self.dropout(attn)
 
-        # Compute output with a_ij^V:
-        v_rel = v.unsqueeze(1) + a_v    # [B,H,1-or-64,64,Dh]
-        out = (attn.unsqueeze(-1) * v_rel).sum(-2)  # [B,H,64,Dh]
+        # Compute output with a_ij^V
+        v_rel = v.unsqueeze(2) + a_v.unsqueeze(0).unsqueeze(0)  # [B, H, 64, 64, Dh]
+        out = (attn.unsqueeze(-1) * v_rel).sum(-2)  # [B, H, 64, Dh]
 
-        out = out.transpose(1,2).reshape(B, N, D)
-        x = x + self.proj(out)
+        out = out.transpose(1, 2).reshape(B, N, D)  # [B, 64, D]
+        x = x + self.dropout(self.proj(out))
 
         # MLP block
         x = x + self.mlp(self.norm2(x))
         return x
 
 class TransformerBackbone(nn.Module):
-    def __init__(self, num_filters, depth=6, heads=8):
+    def __init__(self, num_filters, depth=6, heads=8, dropout=0.1):
         super().__init__()
         self.depth = depth
         self.num_filters = num_filters
         self.blocks = nn.ModuleList([
-            TransformerBlock(num_filters, heads=heads)
+            TransformerBlock(num_filters, heads=heads, dropout=dropout)
             for _ in range(depth)
         ])
 
@@ -132,6 +152,7 @@ class LeelaZeroTransformer(nn.Module):
         num_residual_blocks=12,
         se_ratio=None,   # unused but kept for compatibility
         heads=8,
+        dropout=0.1,
         **kwargs
     ):
         super().__init__()
@@ -145,7 +166,8 @@ class LeelaZeroTransformer(nn.Module):
         self.backbone = TransformerBackbone(
             num_filters=num_filters,
             depth=num_residual_blocks,
-            heads=heads
+            heads=heads,
+            dropout=dropout
         )
 
         # Policy/value heads unchanged
