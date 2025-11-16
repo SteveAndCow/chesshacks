@@ -143,23 +143,25 @@ class MonteCarlo:
         else:
             self.random_rollout(child)
 
-# Load the trained neural network model
-print("🤖 Loading chess model from HuggingFace...")
-from .models.inference import ChessModelLoader
+# Load the trained LC0 neural network model
+print("🤖 Loading LC0 model from HuggingFace...")
+from .models.lc0_inference import LC0ModelLoader
 
-model_loader = ChessModelLoader(
-    repo_id="steveandcow/chesshacks-bot",
-    model_name="cnn_baseline",
+model_loader = LC0ModelLoader(
+    repo_id="steveandcow/chesshacks-lc0",
+    model_file="lc0_128x6.pt",
     device="cpu"  # Use CPU for deployment (or "cuda" if GPU available)
 )
 
 try:
     model_loader.load_model()
-    print("✅ Model loaded successfully!")
+    print("✅ LC0 Model loaded successfully!")
     MODEL_LOADED = True
 except Exception as e:
     print(f"⚠️ Failed to load model: {e}")
     print("Falling back to random policy...")
+    import traceback
+    traceback.print_exc()
     MODEL_LOADED = False
 
 def child_finder(node, montecarlo):
