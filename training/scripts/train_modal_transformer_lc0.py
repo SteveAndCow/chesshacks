@@ -358,8 +358,12 @@ def train_transformer_model(
                 },
             }
 
-            model_path = "/tmp/best_transformer_model.pt"
+            # Save to persistent volume instead of ephemeral /tmp
+            checkpoint_dir = "/data/checkpoints"
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            model_path = f"{checkpoint_dir}/best_transformer_model.pt"
             torch.save(checkpoint, model_path)
+            print(f"💾 Checkpoint saved to persistent storage: {model_path}")
         else:
             patience_counter += 1
             print(f"⚠️  No improvement. Patience: {patience_counter}/{patience}")
