@@ -46,7 +46,7 @@ data_volume = modal.Volume.from_name("chess-training-data", create_if_missing=Tr
     ],
 )
 def train_lc0_model(
-    num_epochs: int = 10,
+    num_epochs: int = 6,  # Reduced from 10 to prevent overfitting (with early stopping)
     batch_size: int = 256,
     learning_rate: float = 0.001,
     num_filters: int = 128,
@@ -57,6 +57,7 @@ def train_lc0_model(
     moves_left_loss_weight: float = 0.5,
     q_ratio: float = 0.0,
     hf_repo: str = "steveandcow/chesshacks-lc0",
+    dropout: float = 0.1,  # Add dropout parameter for regularization
 ):
     """
     Train LC0 model on Modal GPU.
@@ -97,7 +98,7 @@ def train_lc0_model(
         print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
 
-    # Create model
+    # Create model with dropout regularization
     print("\n📦 Creating LC0 model...")
     model = LeelaZeroNet(
         num_filters=num_filters,
@@ -108,7 +109,8 @@ def train_lc0_model(
         moves_left_loss_weight=moves_left_loss_weight,
         q_ratio=q_ratio,
         optimizer="adam",
-        learning_rate=learning_rate
+        learning_rate=learning_rate,
+        dropout=dropout  # Pass dropout for regularization
     ).to(device)
 
     # Compile model for 20-30% speedup (PyTorch 2.0+)
@@ -150,11 +152,11 @@ def train_lc0_model(
         traceback.print_exc()
         return {"error": f"Data loading failed: {e}"}
 
-    # Setup optimizer
+    # Setup optimizer with increased weight decay for better regularization
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=learning_rate,
-        weight_decay=0.0001
+        weight_decay=0.0005  # Increased from 0.0001 to reduce overfitting
     )
 
     # Learning rate scheduler
@@ -164,10 +166,12 @@ def train_lc0_model(
         eta_min=learning_rate * 0.01
     )
 
-    # Training loop
+    # Training loop with early stopping
     print(f"\n🎯 Starting training for {num_epochs} epochs...")
     best_val_loss = float('inf')
     model_path = None
+    patience = 3  # Stop if no improvement for 3 epochs
+    patience_counter = 0
 
     for epoch in range(num_epochs):
         print(f"\n{'='*60}")
@@ -215,9 +219,8 @@ def train_lc0_model(
                 train_moves_left_loss += ml_loss.item()
                 num_batches += 1
 
-                # Limit to 1000 batches per epoch for faster iteration during hackathon
-                if num_batches >= 1000:
-                    break
+                # REMOVED: Artificial 1000-batch limit that caused severe overfitting
+                # Now training on full dataset each epoch for better generalization
 
         except Exception as e:
             print(f"❌ Training failed: {e}")
@@ -282,9 +285,10 @@ def train_lc0_model(
         scheduler.step()
         print(f"Learning rate: {optimizer.param_groups[0]['lr']:.6f}")
 
-        # Save best model
+        # Save best model and handle early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            patience_counter = 0  # Reset patience counter on improvement
             print(f"✅ New best model! (val_loss: {val_loss:.4f})")
 
             checkpoint = {
@@ -303,6 +307,13 @@ def train_lc0_model(
 
             model_path = "/tmp/best_lc0_model.pt"
             torch.save(checkpoint, model_path)
+        else:
+            patience_counter += 1
+            print(f"⚠️  No improvement. Patience: {patience_counter}/{patience}")
+
+            if patience_counter >= patience:
+                print(f"🛑 Early stopping triggered after {epoch + 1} epochs")
+                break
 
     # Training complete
     print("\n" + "="*60)
@@ -349,7 +360,7 @@ def train_lc0_model(
 
 @app.local_entrypoint()
 def main(
-    num_epochs: int = 10,
+    num_epochs: int = 6,  # Reduced from 10 to prevent overfitting (with early stopping)
     batch_size: int = 256,
     num_filters: int = 128,
     num_residual_blocks: int = 6,
