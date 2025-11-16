@@ -149,7 +149,7 @@ from .models.lc0_inference import LC0ModelLoader
 
 model_loader = LC0ModelLoader(
     repo_id="steveandcow/chesshacks-lc0",
-    model_file="best_lc0_model.pt",
+    model_file="lc0_128x6.pt",
     device="cpu"  # Use CPU for deployment (or "cuda" if GPU available)
 )
 
