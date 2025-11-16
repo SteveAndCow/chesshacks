@@ -77,17 +77,18 @@ echo "   ✅ Launched (PID: $MODEL2_PID)"
 echo ""
 sleep 5
 
-echo "📊 MODEL 3: LC0 192x6 (Wider - ALTERNATIVE)"
-echo "   Expected: 2-2.5 hours"
-echo "   Log: training/logs/model3_192x6_${TIMESTAMP}.log"
+echo "📊 MODEL 3: Transformer 256x6h8 (Hybrid LC0+Transformer)"
+echo "   Expected: 2.5-3 hours"
+echo "   Log: training/logs/model3_transformer_${TIMESTAMP}.log"
 echo ""
-nohup modal run training/scripts/train_modal_lc0_v2.py \
+nohup modal run training/scripts/train_modal_transformer_lc0.py \
     --num-epochs 10 \
     --batch-size 256 \
-    --num-filters 192 \
-    --num-residual-blocks 6 \
+    --num-filters 256 \
+    --num-blocks 6 \
+    --heads 8 \
     --hf-repo steveandcow/chesshacks-lc0 \
-    > training/logs/model3_192x6_${TIMESTAMP}.log 2>&1 &
+    > training/logs/model3_transformer_${TIMESTAMP}.log 2>&1 &
 MODEL3_PID=$!
 echo "   ✅ Launched (PID: $MODEL3_PID)"
 echo ""
@@ -97,14 +98,14 @@ echo "ALL 3 MODELS LAUNCHED!"
 echo "=================================================="
 echo ""
 echo "Process IDs:"
-echo "  Model 1 (128x6):  $MODEL1_PID"
-echo "  Model 2 (128x10): $MODEL2_PID"
-echo "  Model 3 (192x6):  $MODEL3_PID"
+echo "  Model 1 (LC0 128x6):        $MODEL1_PID"
+echo "  Model 2 (LC0 128x10):       $MODEL2_PID"
+echo "  Model 3 (Transformer 256x6): $MODEL3_PID"
 echo ""
 echo "Monitor training:"
 echo "  tail -f training/logs/model1_128x6_${TIMESTAMP}.log"
 echo "  tail -f training/logs/model2_128x10_${TIMESTAMP}.log"
-echo "  tail -f training/logs/model3_192x6_${TIMESTAMP}.log"
+echo "  tail -f training/logs/model3_transformer_${TIMESTAMP}.log"
 echo ""
 echo "Check Modal dashboard:"
 echo "  https://modal.com/apps"
