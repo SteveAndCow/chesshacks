@@ -65,14 +65,19 @@ class Node:
         UCB1 score for MCTS node selection.
         Balances exploitation (win rate) vs exploration (visit count).
         """
-        # Exploration term (UCB formula)
-        exploration = self.discovery_factor * (self.policy_value or 1) * \
-            sqrt(log(self.parent.visits or 1) / (self.visits or 1))
-
         # Exploitation term (average value from this node's perspective)
         # Values are already negated during backprop, so parent's perspective
         # is automatically correct
         exploitation = self.win_value / (self.visits or 1)
+
+        # If we have infinite value (checkmate), return it directly
+        # No need to add exploration - we always want to choose/avoid this move
+        if math.isinf(exploitation):
+            return exploitation
+
+        # Exploration term (UCB formula) - only matters for finite values
+        exploration = self.discovery_factor * (self.policy_value or 1) * \
+            sqrt(log(self.parent.visits or 1) / (self.visits or 1))
 
         return exploitation + exploration
 
@@ -88,6 +93,10 @@ class MonteCarlo:
         self.early_stop_threshold = 0.7  # Stop if best move has 70% of visits
 
     def make_choice(self):
+        # Handle terminal positions (no legal moves)
+        if not self.root_node.children:
+            return None
+
         best_children = []
         most_visits = float('-inf')
 
@@ -101,6 +110,10 @@ class MonteCarlo:
         return random.choice(best_children)
 
     def make_exploratory_choice(self):
+        # Handle terminal positions (no legal moves)
+        if not self.root_node.children:
+            return None
+
         children_visits = map(lambda child: child.visits, self.root_node.children)
         children_visit_probabilities = [visit / self.root_node.visits for visit in children_visits]
         random_probability = random.uniform(0, sum(children_visit_probabilities))
@@ -208,19 +221,24 @@ def node_evaluator(node):
     Evaluate node value from the perspective of the player to move at this node.
 
     Returns:
-        Value in [-1, 1] where:
-        +1 = winning for player to move
-        -1 = losing for player to move
-        0 = even position
+        Value where:
+        +inf = checkmate (winning for player to move)
+        -inf = checkmated (losing for player to move)
+        0 = draw or even position
+        [-1, +1] = normal position evaluation from NN
     """
     global cache_hits, cache_misses
 
     # CRITICAL: Check terminal states first!
     if node.state.is_checkmate():
-        # Current player is checkmated = loss for them
-        return -1.0
+        # Current player is checkmated = infinite loss
+        # Using -inf is semantically correct: checkmate is infinitely bad
+        # This ensures: 1) Checkmate moves are always strongly preferred
+        #               2) We never waste simulations on losing moves
+        #               3) Losing moves get score -inf and are never selected
+        return -math.inf
     elif node.state.is_stalemate() or node.state.is_insufficient_material():
-        # Draw
+        # Draw - neutral outcome (much better than -inf!)
         return 0.0
 
     # Use neural network for position evaluation if available
@@ -382,8 +400,15 @@ def test_func(ctx: GameContext):
             # Get best move from MCTS (OPTIMIZED: O(1) lookup using stored move)
             t0 = time.time()
             best_child = montecarlo.make_choice()
-            best_move = best_child.move  # O(1) lookup! No more deepcopy loop
             timings['best_move_select'] = (time.time() - t0) * 1000
+
+            # Handle terminal position (no legal moves)
+            if best_child is None:
+                print("⚠️ No legal moves available (terminal position)")
+                ctx.logProbabilities({})
+                raise ValueError("No legal moves available")
+
+            best_move = best_child.move  # O(1) lookup! No more deepcopy loop
 
             # Cache statistics for this move
             move_cache_hits = cache_hits - old_cache_hits
