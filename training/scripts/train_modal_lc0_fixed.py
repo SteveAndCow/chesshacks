@@ -56,6 +56,7 @@ def train_lc0_model(
     value_loss_weight: float = 1.6,
     moves_left_loss_weight: float = 0.5,
     q_ratio: float = 0.0,
+    hf_repo: str = "your-username/chesshacks-lc0",
 ):
     """
     Train LC0 model on Modal GPU.
@@ -314,23 +315,22 @@ def train_lc0_model(
         return {"error": "No HuggingFace token"}
 
     try:
-        repo_id = "your-username/chesshacks-lc0"  # TODO: Make configurable
         model_name = f"lc0_{num_filters}x{num_residual_blocks}"
 
         api = HfApi()
         api.upload_file(
             path_or_fileobj=model_path,
             path_in_repo=f"{model_name}.pt",
-            repo_id=repo_id,
+            repo_id=hf_repo,
             token=hf_token,
         )
 
-        print(f"✅ Model uploaded to https://huggingface.co/{repo_id}")
+        print(f"✅ Model uploaded to https://huggingface.co/{hf_repo}")
 
         return {
             "best_val_loss": best_val_loss,
             "epochs_trained": num_epochs,
-            "hf_repo": repo_id,
+            "hf_repo": hf_repo,
             "model_name": model_name,
         }
 
@@ -349,6 +349,7 @@ def main(
     batch_size: int = 256,
     num_filters: int = 128,
     num_residual_blocks: int = 6,
+    hf_repo: str = "your-username/chesshacks-lc0",
 ):
     """
     Launch LC0 training on Modal.
@@ -358,18 +359,21 @@ def main(
         batch_size: Batch size
         num_filters: Number of filters (128 recommended)
         num_residual_blocks: Number of blocks (6-10 recommended)
+        hf_repo: HuggingFace repo ID (e.g., "username/chesshacks-lc0")
     """
     print(f"🚀 Launching LC0 training on Modal...")
     print(f"Config:")
     print(f"  - Epochs: {num_epochs}")
     print(f"  - Batch size: {batch_size}")
     print(f"  - Architecture: {num_filters}x{num_residual_blocks}")
+    print(f"  - HuggingFace repo: {hf_repo}")
 
     result = train_lc0_model.remote(
         num_epochs=num_epochs,
         batch_size=batch_size,
         num_filters=num_filters,
-        num_residual_blocks=num_residual_blocks
+        num_residual_blocks=num_residual_blocks,
+        hf_repo=hf_repo
     )
 
     print("\n" + "="*60)

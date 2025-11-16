@@ -86,7 +86,7 @@ class ConvolutionalPolicyHead(nn.Module):
         nn.init.xavier_normal_(self.conv.weight)
         self.fc1 = nn.parameter.Parameter(
             torch.tensor(
-                lc0_az_policy_map.make_map(), requires_grad=False, dtype=torch.float32
+                lc0_policy_map.make_map(), requires_grad=False, dtype=torch.float32
             ),
             requires_grad=False,
         )

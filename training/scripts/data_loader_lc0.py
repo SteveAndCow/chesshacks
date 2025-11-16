@@ -290,6 +290,11 @@ def create_train_val_loaders(
 
     # Split files into train/val
     num_train_files = int(len(npz_files) * train_split)
+
+    # Ensure at least 1 file for validation
+    if num_train_files >= len(npz_files):
+        num_train_files = max(1, len(npz_files) - 1)
+
     train_files = npz_files[:num_train_files]
     val_files = npz_files[num_train_files:]
 
