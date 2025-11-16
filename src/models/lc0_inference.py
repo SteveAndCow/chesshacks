@@ -313,3 +313,93 @@ class LC0ModelLoader:
         """
         _, value = self.predict(board)
         return value
+
+    def batch_predict(
+        self,
+        boards: list
+    ) -> Tuple[list, list]:
+        """
+        Predict move probabilities and position values for multiple boards at once.
+
+        This is significantly faster than calling predict() multiple times
+        because it processes all boards in a single forward pass through the network.
+
+        Args:
+            boards: List of chess.Board objects to evaluate
+
+        Returns:
+            (move_probs_list, values_list) where:
+            - move_probs_list: List of dicts mapping legal moves to probabilities
+            - values_list: List of position evaluations
+        """
+        if self.model is None:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        if not boards:
+            return [], []
+
+        # Convert all boards to tensors and stack them
+        board_tensors = [self.board_to_lc0_tensor(board) for board in boards]
+        batch_tensor = torch.cat(board_tensors, dim=0)  # (N, 112, 8, 8)
+
+        # Match model dtype (FP16 if enabled)
+        if next(self.model.parameters()).dtype == torch.float16:
+            batch_tensor = batch_tensor.half()
+
+        # Single batched forward pass - this is the key optimization!
+        with torch.no_grad():
+            model_output = self.model(batch_tensor)
+            policy_logits = model_output.policy  # (N, 1858)
+            wdl_logits = model_output.value      # (N, 3)
+
+        # Process results for each board
+        move_probs_list = []
+        values_list = []
+
+        for i, board in enumerate(boards):
+            # Convert WDL to value for this board
+            wdl_probs = torch.softmax(wdl_logits[i], dim=0)  # (3,)
+            win_prob = wdl_probs[0].item()
+            loss_prob = wdl_probs[2].item()
+            value = win_prob - loss_prob
+            values_list.append(value)
+
+            # Convert policy logits to probabilities
+            policy_probs = torch.softmax(policy_logits[i], dim=0)  # (1858,)
+
+            # Map probabilities to legal moves
+            legal_moves = list(board.legal_moves)
+            move_probs = {}
+
+            for move in legal_moves:
+                # Convert move to UCI
+                move_str = move.uci()
+
+                # Mirror for black
+                if board.turn == chess.BLACK:
+                    from_square = chess.square_mirror(move.from_square)
+                    to_square = chess.square_mirror(move.to_square)
+                    flipped_move = chess.Move(from_square, to_square, move.promotion)
+                    move_str = flipped_move.uci()
+
+                # Look up in policy map
+                if move_str in self.policy_map:
+                    policy_idx = self.policy_map[move_str]
+                    prob = policy_probs[policy_idx].item()
+                    move_probs[move] = prob
+                else:
+                    # Fallback for moves not in policy map
+                    move_probs[move] = 1e-6
+
+            # Normalize probabilities over legal moves
+            total_prob = sum(move_probs.values())
+            if total_prob > 0:
+                move_probs = {m: p / total_prob for m, p in move_probs.items()}
+            else:
+                # Uniform distribution if all probs are 0
+                uniform_prob = 1.0 / len(legal_moves)
+                move_probs = {m: uniform_prob for m in legal_moves}
+
+            move_probs_list.append(move_probs)
+
+        return move_probs_list, values_list

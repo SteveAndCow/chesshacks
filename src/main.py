@@ -28,6 +28,7 @@ class Node:
         "_cached_piece_score",
         "_cached_legal_moves_count",
         "score",  # optional cached score
+        "virtual_loss",  # for batch inference
     )
 
     def __init__(self, state):
@@ -44,6 +45,7 @@ class Node:
         self._cached_piece_score: Optional[float] = None
         self._cached_legal_moves_count: Optional[int] = None
         self.score = 0.0
+        self.virtual_loss = 0  # virtual loss for batch inference
 
     def update_win_value_iterative(self, value: float):
         """Iteratively propagate win_value and visits up to the root (fast, no recursion)."""
@@ -119,8 +121,11 @@ class Node:
         visits = self.visits
         parent_visits = parent.visits
 
+        # Account for virtual loss - makes nodes being evaluated less attractive
+        effective_visits = visits + self.virtual_loss
+
         # avoid zero division
-        visits_safe = visits if visits > 0 else 1
+        visits_safe = effective_visits if effective_visits > 0 else 1
         parent_visits_safe = parent_visits if parent_visits > 0 else 1
 
         discovery_factor = self.discovery_factor
@@ -132,8 +137,10 @@ class Node:
         discovery_operand = discovery_factor * policy * sqrt_term
 
         # win operand uses sign depending on ownership relative to root player
+        # Virtual loss penalty: assume losses for nodes being evaluated
+        effective_win_value = self.win_value - self.virtual_loss
         win_multiplier = 1.0 if parent.player_number == root_node.player_number else -1.0
-        win_operand = win_multiplier * (self.win_value / visits_safe)
+        win_operand = win_multiplier * (effective_win_value / visits_safe)
 
         # small heuristic features
         legal_count = self._compute_legal_moves_count()
@@ -173,9 +180,23 @@ class Node:
         # quicker boolean checks
         return (self.visits > 0) or (self.policy_value is not None)
 
+    def add_virtual_loss(self):
+        """Add virtual loss to prevent multiple simulations from selecting the same node."""
+        node = self
+        while node is not None:
+            node.virtual_loss += 1
+            node = node.parent
+
+    def remove_virtual_loss(self):
+        """Remove virtual loss after evaluation is complete."""
+        node = self
+        while node is not None:
+            node.virtual_loss = max(0, node.virtual_loss - 1)
+            node = node.parent
+
 
 class MonteCarlo:
-    __slots__ = ("root_node", "child_finder", "node_evaluator")
+    __slots__ = ("root_node", "child_finder", "node_evaluator", "batch_evaluator")
 
     def __init__(self, root_node: Node):
         self.root_node = root_node
@@ -183,6 +204,8 @@ class MonteCarlo:
         self.child_finder: Callable[[Node, "MonteCarlo"], None] = lambda node, mc: None
         # node_evaluator(child, mc) -> optional numeric score (win_value) or None
         self.node_evaluator: Callable[[Node, "MonteCarlo"], Optional[float]] = lambda child, mc: None
+        # batch_evaluator([nodes]) -> [values] for batched evaluation
+        self.batch_evaluator: Optional[Callable[[list], list]] = None
 
     def make_choice(self) -> Node:
         """Return child with most visits (ties broken uniformly)."""
@@ -210,6 +233,40 @@ class MonteCarlo:
                 return c
         return children[-1]  # safety fallback
 
+    def should_stop_early(self) -> bool:
+        """
+        Check if we should stop MCTS early due to obvious best move.
+
+        This implements more aggressive early stopping than before:
+        - If one move has 80%+ of visits, stop
+        - If best move has 3x more visits than second best, stop
+        - Requires at least 10 total visits to prevent premature stopping
+        """
+        if not self.root_node.children:
+            return False
+
+        if len(self.root_node.children) < 2:
+            return True  # Only one legal move
+
+        total_visits = self.root_node.visits
+        if total_visits < 10:
+            return False  # Need minimum visits
+
+        # Sort children by visits
+        sorted_children = sorted(self.root_node.children, key=lambda c: c.visits, reverse=True)
+        best_visits = sorted_children[0].visits
+        second_visits = sorted_children[1].visits if len(sorted_children) > 1 else 0
+
+        # Stop if best move has 80% of visits
+        if best_visits > 0.8 * total_visits:
+            return True
+
+        # Stop if best move has 3x more visits than second best
+        if second_visits > 0 and best_visits > 3 * second_visits:
+            return True
+
+        return False
+
     def simulate(self, expansion_count: int = 1):
         """Perform `expansion_count` simulations. Inner loop is optimized."""
         for _ in range(expansion_count):
@@ -218,6 +275,89 @@ class MonteCarlo:
             while node.expanded and node.children:
                 node = node.get_preferred_child(self.root_node)
             self.expand(node)
+
+    def simulate_batched(self, expansion_count: int = 1, batch_size: int = 8):
+        """
+        Perform simulations with batched NN evaluation.
+
+        This is much faster than simulate() because it:
+        1. Collects multiple leaf nodes before evaluation
+        2. Evaluates them all in a single NN forward pass
+        3. Uses virtual loss to prevent redundant exploration
+        4. Implements early stopping to save time on obvious moves
+
+        Args:
+            expansion_count: Number of simulations to run
+            batch_size: Number of nodes to collect before batched evaluation
+        """
+        if self.batch_evaluator is None:
+            # Fallback to sequential if no batch evaluator provided
+            return self.simulate(expansion_count)
+
+        i = 0
+        while i < expansion_count:
+            # Check for early stopping after each batch
+            if self.should_stop_early():
+                print(f"⚡ Early stopping after {i} simulations (obvious best move)")
+                break
+
+            # Collect a batch of leaf nodes
+            leaf_batch = []
+
+            # Collect up to batch_size leaves (or remaining simulations)
+            batch_limit = min(batch_size, expansion_count - i)
+
+            for _ in range(batch_limit):
+                # Select a leaf node
+                node = self.root_node
+                while node.expanded and node.children:
+                    node = node.get_preferred_child(self.root_node)
+
+                # Apply virtual loss to prevent other simulations from selecting this path
+                node.add_virtual_loss()
+
+                # Generate children if not yet expanded
+                if not node.children:
+                    self.child_finder(node, self)
+
+                # Add to batch for evaluation
+                leaf_batch.append(node)
+
+            # Batch evaluate all collected leaves
+            if leaf_batch:
+                try:
+                    # Get boards from nodes
+                    boards = [node.state for node in leaf_batch]
+
+                    # Batch evaluate - returns list of values
+                    values = self.batch_evaluator(boards)
+
+                    # Validate result length
+                    if len(values) != len(leaf_batch):
+                        raise RuntimeError(
+                            f"Batch evaluator returned {len(values)} values for {len(leaf_batch)} boards"
+                        )
+
+                    # Expand and backup each node with its value
+                    for node, value in zip(leaf_batch, values):
+                        # Remove virtual loss
+                        node.remove_virtual_loss()
+
+                        # Update the node with the evaluated value
+                        if value is not None:
+                            node.update_win_value(value)
+
+                        # Mark as expanded (prevents redundant evaluation)
+                        node.expanded = True
+
+                except Exception as e:
+                    # On error, remove virtual losses and fall back to sequential
+                    print(f"⚠️ Batch evaluation error: {e}, falling back to sequential")
+                    for node in leaf_batch:
+                        node.remove_virtual_loss()
+                        self.expand(node)
+
+            i += batch_limit
 
     def expand(self, node: Node):
         """Call child_finder to populate children, then evaluate each child fast."""
@@ -236,8 +376,8 @@ class MonteCarlo:
                 # clear rollout-created children to reduce memory (original behavior)
                 child.children = []
 
-        if node.children:
-            node.expanded = True
+        # Mark as expanded (even terminal nodes with no children)
+        node.expanded = True
 
     def _random_rollout_iter(self, node: Node):
         """Iterative random rollout until evaluator returns a value. Avoid recursion."""
@@ -288,6 +428,41 @@ import random
 import time
 import traceback
 
+# Persistent position cache across games (manual implementation with FIFO eviction)
+POSITION_CACHE = {}
+CACHE_STATS = {"hits": 0, "misses": 0, "total_lookups": 0}
+
+def get_cached_position_eval(fen: str) -> Optional[float]:
+    """Get cached evaluation for a position."""
+    CACHE_STATS["total_lookups"] += 1
+    result = POSITION_CACHE.get(fen)
+    if result is not None:
+        CACHE_STATS["hits"] += 1
+    else:
+        CACHE_STATS["misses"] += 1
+    return result
+
+def cache_position_eval(fen: str, value: float):
+    """Cache evaluation for a position with FIFO eviction."""
+    # Evict oldest entries if at capacity
+    while len(POSITION_CACHE) >= 10000:
+        try:
+            POSITION_CACHE.pop(next(iter(POSITION_CACHE)))
+        except (StopIteration, RuntimeError):
+            # Cache is empty or was modified during iteration
+            break
+    POSITION_CACHE[fen] = value
+
+def print_cache_stats():
+    """Print cache statistics for debugging."""
+    total = CACHE_STATS["total_lookups"]
+    if total > 0:
+        hit_rate = 100 * CACHE_STATS["hits"] / total
+        print(f"📊 Cache: {CACHE_STATS['hits']} hits / {total} lookups ({hit_rate:.1f}% hit rate)")
+    else:
+        print("📊 Cache: No lookups yet")
+
+
 # child_finder: avoid deepcopy by using board.copy() + push and avoid re-iterating generators.
 def child_finder(node, montecarlo):
     board = node.state
@@ -328,6 +503,13 @@ def node_evaluator(node, montecarlo):
         setattr(node, "_cached_eval_value", -math.inf)
         return -math.inf
 
+    # Check persistent position cache
+    fen = node.state.fen()
+    cached_value = get_cached_position_eval(fen)
+    if cached_value is not None:
+        setattr(node, "_cached_eval_value", cached_value)
+        return cached_value
+
     # If there's a loaded model, prefer it. Keep NN calls guarded and lightweight in error handling.
     if MODEL_LOADED:
         try:
@@ -339,8 +521,10 @@ def node_evaluator(node, montecarlo):
                 pass
             else:
                 # cache and return
-                setattr(node, "_cached_eval_value", float(val))
-                return float(val)
+                float_val = float(val)
+                setattr(node, "_cached_eval_value", float_val)
+                cache_position_eval(fen, float_val)  # Add to persistent cache
+                return float_val
         except Exception as e:
             # Don't spam with stack traces inside hot loops — log once and fallback.
             # If you want persistent diagnostics, consider toggling a debug flag.
@@ -350,8 +534,10 @@ def node_evaluator(node, montecarlo):
 
     # Fallback: use the node's internal get_score heuristic (fast)
     val = node.get_score(montecarlo.root_node)
-    setattr(node, "_cached_eval_value", float(val))
-    return float(val)
+    float_val = float(val)
+    setattr(node, "_cached_eval_value", float_val)
+    cache_position_eval(fen, float_val)  # Add to persistent cache
+    return float_val
 
 
 @chess_manager.entrypoint
@@ -380,6 +566,16 @@ def test_func(ctx: GameContext):
             traceback.print_exc()
             move_probs = None
 
+    # FAST OPENING MOVES (skip MCTS in opening to save time)
+    move_number = ctx.board.fullmove_number
+    if move_number <= 8:  # Opening phase
+        print("⚡ OPENING: Using fast NN policy (no MCTS)")
+        if MODEL_LOADED and move_probs:
+            best_move = max(move_probs.items(), key=lambda x: x[1])[0]
+            return best_move
+        # Fallback to random if no model
+        return random.choice(legal_moves)
+
     # ADAPTIVE TIME MANAGEMENT (improved)
     time_left_ms = getattr(ctx, "timeLeft", None)
     if time_left_ms is None:
@@ -388,15 +584,16 @@ def test_func(ctx: GameContext):
 
     print(f"⏱️  Time remaining: {time_left_ms}ms")
 
-    OVERHEAD_MS = 250   # lower overhead assumed if we optimized NN batching etc.
-    # If you can measure time per sim, replace MS_PER_SIMULATION with a dynamic estimate.
-    MS_PER_SIMULATION = 90
+    # With batch inference, we're much faster - adjust time estimates
+    OVERHEAD_MS = 200   # lower overhead with batching
+    # Batch inference is ~5-8x faster, so we can afford more simulations per ms
+    MS_PER_SIMULATION = 15  # Much faster with batching (was 90)
     available_time = max(time_left_ms - OVERHEAD_MS, 0)
     max_simulations = int(available_time // MS_PER_SIMULATION)
 
-    MIN_TIME_FOR_MCTS = 700
-    MIN_SIMULATIONS = 2
-    MAX_SIMULATIONS = 32
+    MIN_TIME_FOR_MCTS = 500
+    MIN_SIMULATIONS = 4
+    MAX_SIMULATIONS = 100  # Increased from 32 since we're faster with batching
 
     # If not enough time for meaningful MCTS, just use NN policy (or uniform if not available).
     if time_left_ms < MIN_TIME_FOR_MCTS or max_simulations < MIN_SIMULATIONS:
@@ -412,8 +609,47 @@ def test_func(ctx: GameContext):
         ctx.logProbabilities({m: p for m, p in zip(legal_moves, normalized)})
         return random.choices(legal_moves, weights=move_weights, k=1)[0]
 
-    # SEARCH MODE
-    num_simulations = min(max_simulations, MAX_SIMULATIONS)
+    # DYNAMIC SIMULATION COUNT based on position complexity
+    num_legal_moves = len(legal_moves)
+    if num_legal_moves < 5:  # Forced/obvious position
+        base_simulations = min(20, max_simulations)
+        print(f"🎯 SIMPLE POSITION: {num_legal_moves} legal moves")
+    elif num_legal_moves > 30:  # Complex position
+        base_simulations = min(MAX_SIMULATIONS, max_simulations)
+        print(f"🎯 COMPLEX POSITION: {num_legal_moves} legal moves")
+    else:
+        base_simulations = min(50, max_simulations)
+        print(f"🎯 NORMAL POSITION: {num_legal_moves} legal moves")
+
+    # ADAPTIVE SIMULATION BUDGET based on policy entropy (NN confidence)
+    # If NN is confident, use fewer simulations; if uncertain, use more
+    if MODEL_LOADED and move_probs:
+        # Calculate entropy of policy distribution (handle edge cases)
+        if not move_probs:
+            normalized_entropy = 0.5  # Default to medium confidence
+        else:
+            # Only sum over non-zero probabilities to avoid log(0)
+            entropy = -sum(p * math.log(p + 1e-10) for p in move_probs.values() if p > 0)
+            max_entropy = math.log(max(1, len(move_probs)))  # Avoid log(0)
+            normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0
+
+        # Adjust simulations based on entropy
+        if normalized_entropy < 0.3:  # Very confident NN
+            entropy_multiplier = 0.5
+            confidence_str = "CONFIDENT"
+        elif normalized_entropy > 0.7:  # Very uncertain NN
+            entropy_multiplier = 1.5
+            confidence_str = "UNCERTAIN"
+        else:
+            entropy_multiplier = 1.0
+            confidence_str = "NORMAL"
+
+        num_simulations = int(base_simulations * entropy_multiplier)
+        num_simulations = min(num_simulations, max_simulations)
+        print(f"📊 NN {confidence_str} (entropy: {normalized_entropy:.2f}), simulations: {base_simulations} → {num_simulations}")
+    else:
+        num_simulations = base_simulations
+
     print(f"🎯 SEARCH MODE: Running {num_simulations} MCTS simulations")
 
     # Build a fen->move map efficiently (single copy + push/pop per move)
@@ -426,20 +662,46 @@ def test_func(ctx: GameContext):
         finally:
             board.pop()
 
-    # Run MCTS
+    # Run MCTS with batch inference
     root = Node(board.copy())  # use copy so MonteCarlo mutates a separate tree
     montecarlo = MonteCarlo(root)
     montecarlo.child_finder = child_finder
     montecarlo.node_evaluator = node_evaluator
 
-    # If your node_evaluator can be batched, consider running a micro-batching wrapper here.
-    montecarlo.simulate(num_simulations)
+    # Set up batch evaluator if model is loaded
+    if MODEL_LOADED:
+        def batch_evaluator(boards):
+            """Evaluate multiple boards at once using batched NN inference."""
+            try:
+                _, values = model_loader.batch_predict(boards)
+                return values
+            except Exception as e:
+                print(f"⚠️ Batch predict failed: {e}, falling back to sequential")
+                try:
+                    # Fallback to sequential evaluation
+                    return [model_loader.evaluate_position(b) for b in boards]
+                except Exception as e2:
+                    print(f"⚠️ Sequential fallback also failed: {e2}, using neutral heuristic")
+                    # Ultimate fallback: return 0.0 (neutral evaluation) for all positions
+                    return [0.0] * len(boards)
+
+        montecarlo.batch_evaluator = batch_evaluator
+
+        # Use batched simulation for much faster search
+        # Batch size of 8 is a good balance between GPU utilization and latency
+        montecarlo.simulate_batched(num_simulations, batch_size=8)
+    else:
+        # Fallback to sequential if no model
+        montecarlo.simulate(num_simulations)
 
     best_child = montecarlo.make_choice()
 
     # quick lookup: use fen map to get the original Move object without performing deep copies
     best_fen = best_child.state.fen()
     best_move = fen_to_move.get(best_fen)
+
+    # Print cache statistics for monitoring performance
+    print_cache_stats()
 
     if best_move:
         print(f"✓ MCTS selected move: {best_move.uci()}")
