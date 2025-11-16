@@ -28,7 +28,7 @@ image = (
         "numpy",
         "tqdm",
     )
-    .copy_local_dir(
+    .add_local_dir(
         local_path="training/scripts/models",
         remote_path="/root/models"
     )
