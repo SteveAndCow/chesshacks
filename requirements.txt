@@ -26,3 +26,6 @@ python-chess==1.999
 
 # Model Loading (torch/numpy are pre-installed)
 huggingface-hub>=0.20.0
+
+
+numpy >= 1.24.0
