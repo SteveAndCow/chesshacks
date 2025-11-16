@@ -187,6 +187,12 @@ class LC0ModelLoader:
         print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
         print(f"Val Loss: {checkpoint.get('val_loss', 'N/A')}")
 
+        if self.device == "cpu":
+            pass
+        else:
+            self.model = self.model.half()
+            print("✅ Model converted to FP16 for faster inference")
+
         return model
 
     def board_to_lc0_tensor(self, board: chess.Board) -> torch.Tensor:
