@@ -191,7 +191,7 @@ class Node:
         """Remove virtual loss after evaluation is complete."""
         node = self
         while node is not None:
-            node.virtual_loss -= 1
+            node.virtual_loss = max(0, node.virtual_loss - 1)
             node = node.parent
 
 
@@ -332,6 +332,12 @@ class MonteCarlo:
                     # Batch evaluate - returns list of values
                     values = self.batch_evaluator(boards)
 
+                    # Validate result length
+                    if len(values) != len(leaf_batch):
+                        raise RuntimeError(
+                            f"Batch evaluator returned {len(values)} values for {len(leaf_batch)} boards"
+                        )
+
                     # Expand and backup each node with its value
                     for node, value in zip(leaf_batch, values):
                         # Remove virtual loss
@@ -423,23 +429,7 @@ import random
 import time
 import traceback
 
-# Persistent position cache across games (LRU cache with 10k positions)
-from functools import lru_cache
-
-@lru_cache(maxsize=10000)
-def _cached_position_evaluation(fen_hash: str) -> Optional[float]:
-    """
-    Persistent cache for position evaluations.
-
-    This cache persists across games, which is especially useful for
-    opening positions that appear frequently.
-
-    Returns None if not in cache, otherwise returns the cached value.
-    """
-    # This is just a cache lookup - actual storage is handled by lru_cache
-    return None  # Will be populated by the decorator
-
-# Global position evaluation cache (bypassing lru_cache decorator for manual control)
+# Persistent position cache across games (manual implementation with FIFO eviction)
 POSITION_CACHE = {}
 CACHE_STATS = {"hits": 0, "misses": 0, "total_lookups": 0}
 
@@ -454,10 +444,14 @@ def get_cached_position_eval(fen: str) -> Optional[float]:
     return result
 
 def cache_position_eval(fen: str, value: float):
-    """Cache evaluation for a position with LRU eviction."""
-    if len(POSITION_CACHE) >= 10000:
-        # Simple FIFO eviction (could use more sophisticated LRU)
-        POSITION_CACHE.pop(next(iter(POSITION_CACHE)))
+    """Cache evaluation for a position with FIFO eviction."""
+    # Evict oldest entries if at capacity
+    while len(POSITION_CACHE) >= 10000:
+        try:
+            POSITION_CACHE.pop(next(iter(POSITION_CACHE)))
+        except (StopIteration, RuntimeError):
+            # Cache is empty or was modified during iteration
+            break
     POSITION_CACHE[fen] = value
 
 def print_cache_stats():
@@ -631,10 +625,14 @@ def test_func(ctx: GameContext):
     # ADAPTIVE SIMULATION BUDGET based on policy entropy (NN confidence)
     # If NN is confident, use fewer simulations; if uncertain, use more
     if MODEL_LOADED and move_probs:
-        # Calculate entropy of policy distribution
-        entropy = -sum(p * math.log(p + 1e-8) for p in move_probs.values())
-        max_entropy = math.log(len(move_probs))
-        normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0
+        # Calculate entropy of policy distribution (handle edge cases)
+        if not move_probs:
+            normalized_entropy = 0.5  # Default to medium confidence
+        else:
+            # Only sum over non-zero probabilities to avoid log(0)
+            entropy = -sum(p * math.log(p + 1e-10) for p in move_probs.values() if p > 0)
+            max_entropy = math.log(max(1, len(move_probs)))  # Avoid log(0)
+            normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0
 
         # Adjust simulations based on entropy
         if normalized_entropy < 0.3:  # Very confident NN
@@ -680,8 +678,13 @@ def test_func(ctx: GameContext):
                 return values
             except Exception as e:
                 print(f"⚠️ Batch predict failed: {e}, falling back to sequential")
-                # Fallback to sequential evaluation
-                return [model_loader.evaluate_position(b) for b in boards]
+                try:
+                    # Fallback to sequential evaluation
+                    return [model_loader.evaluate_position(b) for b in boards]
+                except Exception as e2:
+                    print(f"⚠️ Sequential fallback also failed: {e2}, using neutral heuristic")
+                    # Ultimate fallback: return 0.0 (neutral evaluation) for all positions
+                    return [0.0] * len(boards)
 
         montecarlo.batch_evaluator = batch_evaluator
 

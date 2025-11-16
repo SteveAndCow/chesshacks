@@ -342,6 +342,10 @@ class LC0ModelLoader:
         board_tensors = [self.board_to_lc0_tensor(board) for board in boards]
         batch_tensor = torch.cat(board_tensors, dim=0)  # (N, 112, 8, 8)
 
+        # Match model dtype (FP16 if enabled)
+        if next(self.model.parameters()).dtype == torch.float16:
+            batch_tensor = batch_tensor.half()
+
         # Single batched forward pass - this is the key optimization!
         with torch.no_grad():
             model_output = self.model(batch_tensor)
