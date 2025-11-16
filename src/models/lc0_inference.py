@@ -8,11 +8,56 @@ import chess
 import numpy as np
 from pathlib import Path
 from typing import Tuple, Dict, Optional
-import sys
 
-# Add training scripts to path for model imports
-training_scripts = Path(__file__).parent.parent.parent / "training" / "scripts"
-sys.path.insert(0, str(training_scripts))
+
+def board_to_112_channels(board: chess.Board) -> np.ndarray:
+    """
+    Convert chess board to 112-channel LC0 format (inference version).
+
+    For inference, we only use the current position (no history).
+
+    Returns:
+        (112, 8, 8) numpy array
+    """
+    channels = []
+
+    # 104 channels: 8 board positions × 13 planes each
+    # For inference without history, repeat current position 8 times
+    positions = [board] * 8
+
+    for pos in positions:
+        # 12 piece planes (6 types × 2 colors)
+        for piece_type in chess.PIECE_TYPES:
+            # Our pieces
+            plane = np.zeros(64, dtype=np.float32)
+            for square in pos.pieces(piece_type, board.turn):
+                plane[square] = 1.0
+            channels.append(plane)
+
+            # Opponent pieces
+            plane = np.zeros(64, dtype=np.float32)
+            for square in pos.pieces(piece_type, not board.turn):
+                plane[square] = 1.0
+            channels.append(plane)
+
+        # Repetition counter (always 8 since same position)
+        channels.append(np.full(64, 8, dtype=np.float32))
+
+    # 5 unit planes (castling rights + side to move)
+    channels.append(np.full(64, float(board.has_kingside_castling_rights(board.turn))))
+    channels.append(np.full(64, float(board.has_queenside_castling_rights(board.turn))))
+    channels.append(np.full(64, float(board.has_kingside_castling_rights(not board.turn))))
+    channels.append(np.full(64, float(board.has_queenside_castling_rights(not board.turn))))
+    channels.append(np.full(64, 1.0 if board.turn == chess.WHITE else 0.0))
+
+    # 1 rule50 plane
+    channels.append(np.full(64, board.halfmove_clock / 99.0, dtype=np.float32))
+
+    # 2 constant planes
+    channels.append(np.zeros(64, dtype=np.float32))
+    channels.append(np.ones(64, dtype=np.float32))
+
+    return np.stack(channels).reshape(112, 8, 8)
 
 
 class LC0ModelLoader:
@@ -92,23 +137,17 @@ class LC0ModelLoader:
 
         print(f"Model config: {checkpoint.get('config', 'N/A')}")
 
-        # Import LC0 model architecture
-        from models.lccnn import LeelaZeroNet
+        # Import LC0 model architecture (lightweight inference-only version)
+        from .lc0_net import LeelaZeroNet
 
         # Extract config
         config = checkpoint.get('config', {})
 
-        # Create model with config
+        # Create model with config (inference only needs these 3 params)
         model = LeelaZeroNet(
             num_filters=config.get('num_filters', 128),
             num_residual_blocks=config.get('num_residual_blocks', 6),
-            se_ratio=config.get('se_ratio', 8),
-            policy_loss_weight=1.0,
-            value_loss_weight=1.0,
-            moves_left_loss_weight=0.01,
-            q_ratio=0.0,
-            optimizer='adam',
-            learning_rate=0.001
+            se_ratio=config.get('se_ratio', 8)
         )
 
         # Load weights
@@ -119,7 +158,7 @@ class LC0ModelLoader:
         self.model = model
 
         # Load policy mapping
-        from models.lc0_policy_map import make_map
+        from .lc0_policy_map import make_map
         self.policy_map = make_map()
 
         print(f"✅ LC0 model loaded on {self.device}")
@@ -136,17 +175,12 @@ class LC0ModelLoader:
         Returns:
             (1, 112, 8, 8) tensor
         """
-        # Import preprocessing function from training
-        from preprocess_modal_lc0 import board_to_112_channels
-
         # Convert board to 112 channels
-        # Note: board_to_112_channels expects a list with one position
-        positions = [board]
-        channels = board_to_112_channels(positions)  # (1, 112, 8, 8)
+        channels = board_to_112_channels(board)  # (112, 8, 8)
 
-        # Convert to torch
-        tensor = torch.from_numpy(channels).to(self.device)
-        return tensor
+        # Convert to torch and add batch dimension
+        tensor = torch.from_numpy(channels).unsqueeze(0)  # (1, 112, 8, 8)
+        return tensor.to(self.device)
 
     def predict(
         self,
