@@ -381,9 +381,9 @@ def main(min_elo: int = 2000, positions_per_file: int = 50000):
     print("\nStarting parallel preprocessing...")
     start_time = time.time()
 
-    results = list(preprocess_pgn_file.map(
-        [(f, min_elo, positions_per_file) for f in pgn_files]
-    ))
+    # Use spawn for proper parallel execution with multiple arguments
+    futures = [preprocess_pgn_file.spawn(f, min_elo, positions_per_file) for f in pgn_files]
+    results = [future.get() for future in futures]
 
     elapsed = time.time() - start_time
 
